@@ -5,7 +5,7 @@ export const IDENTITY_SCOPES = ["sybil:verify", "profile:read", "identity:legal_
 export type IdentityScope = (typeof IDENTITY_SCOPES)[number];
 
 /** Scopes the member can switch off on the consent screen (openid never). */
-export const OPTIONAL_SCOPES: readonly string[] = ["accounts:merge", "sybil:verify", "profile:read", "identity:legal_name", "identity:national_id", ...AGENT_SCOPES];
+export const OPTIONAL_SCOPES: readonly string[] = ["accounts:merge", "identity:handle_reservation", "sybil:verify", "profile:read", "identity:legal_name", "identity:national_id", ...AGENT_SCOPES];
 
 /** Scopes whose disclosure is written to identity_disclosure_logs. */
 export const SENSITIVE_SCOPES: readonly string[] = ["sybil:verify", "identity:legal_name", "identity:national_id"];
@@ -71,6 +71,8 @@ export const SUPPORTED_SCOPES = [
   "profile:read",
   "identity:legal_name",
   "identity:national_id",
+  // Anti-bot handle claiming: a vouched-for @handle the app may adopt (handle-reservation.ts).
+  "identity:handle_reservation",
   // Agent scopes: human-delegated, short-lived tokens only (src/lib/agent/agent-scopes.ts).
   ...AGENT_SCOPES,
 ] as const;

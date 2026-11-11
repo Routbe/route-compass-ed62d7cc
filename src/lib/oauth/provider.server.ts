@@ -24,6 +24,7 @@ async function secretPepper(): Promise<string> {
 }
 import { canonicalAppUrl } from "@/lib/app-url";
 import { SUPPORTED_SCOPES } from "./scope-rules";
+import { HANDLE_RESERVATION_CLAIM, HANDLE_RESERVATION_SCOPE } from "./handle-reservation";
 import { APP_ADMIN_ROLES, APP_EDITOR_ROLES, canManageClient, type ClientActor } from "./client-access";
 export type { ClientActor };
 
@@ -700,6 +701,10 @@ export async function exchangeAuthorizationCode(input: {
   const now = Math.floor(Date.now() / 1000);
   const scoped = await subjectFor(client, userId, String(row["redirect_uri"]));
   const subject = scoped.sub;
+  if (scopes.includes(HANDLE_RESERVATION_SCOPE)) {
+    const { handleReservationClaim } = await import("./handle-reservation.server");
+    claims[HANDLE_RESERVATION_CLAIM] = await handleReservationClaim(userId, client.clientId, subject);
+  }
   const idToken = await signJwt({
     iss: issuer(),
     sub: subject,

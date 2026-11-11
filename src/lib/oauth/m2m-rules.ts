@@ -2,7 +2,7 @@ import { AGENT_SCOPES } from "@/lib/agent/agent-scopes";
 /** Pure rules for the OAuth client_credentials grant (machine-to-machine). */
 export const M2M_TOKEN_TTL_SEC = 900;
 /** Identity and agent scopes describe or act for a person; a machine token can never carry them. */
-const USER_SCOPES = new Set(["openid", "profile", "email", "offline_access", "phone", "address", "linked_accounts", "accounts:merge", "sybil:verify", "profile:read", "identity:legal_name", "identity:national_id", ...AGENT_SCOPES]);
+const USER_SCOPES = new Set(["openid", "profile", "email", "offline_access", "phone", "address", "linked_accounts", "accounts:merge", "sybil:verify", "profile:read", "identity:legal_name", "identity:national_id", "identity:handle_reservation", ...AGENT_SCOPES]);
 
 /** Requested scopes that the client owns and that are not user scopes; null = invalid_scope. */
 export function m2mScopes(requested: string | null, clientScopes: string[]): string[] | null {

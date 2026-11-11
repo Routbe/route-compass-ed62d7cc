@@ -4,6 +4,7 @@
  */
 import { sql } from "@/lib/neon";
 import { appSybilNullifier } from "./oidc-identifiers";
+import { HANDLE_RESERVATION_CLAIM, HANDLE_RESERVATION_SCOPE } from "@/lib/oauth/handle-reservation";
 import { disclosedSensitive, nationalIdDecision, splitLegalName, tierAllows, type Tier } from "@/lib/oauth/scope-rules";
 
 type Row = Record<string, unknown>;
@@ -29,6 +30,11 @@ async function identityOf(userId: string): Promise<Identity> {
   const tier: Tier = r["tier_2_legal_identity"] ? "tier_2" : r["tier_1_real_human"] || r["identity_nullifier"] ? "tier_1" : "none";
   const humanNullifier = (r["national_id_nullifier"] as string | null) ?? (r["identity_nullifier"] as string | null) ?? null;
   return { tier, humanNullifier, legalName: (r["legal_name"] as string | null) ?? null };
+}
+
+/** Verification tier only (no nullifier, no name): used by the handle reservation claim. */
+export async function identityTier(userId: string): Promise<Tier> {
+  return (await identityOf(userId)).tier;
 }
 
 export async function getAppSybilNullifier(userId: string, clientId: string): Promise<string | null> {
@@ -88,6 +94,10 @@ export async function generateUserInfoResponse(
       values (${userId}, ${clientId}, ${disclosed}, ${await hashIp(opts.ip ?? null)})`;
     const { appendEncryptedUserEvent } = await import("@/lib/ledger/ledger.server");
     await appendEncryptedUserEvent(userId, { event_type: "identity_disclosure", app_name: client?.name ?? clientId, scopes: disclosed, timestamp: new Date().toISOString() });
+  }
+  if (grantedScopes.includes(HANDLE_RESERVATION_SCOPE)) {
+    const { handleReservationClaim } = await import("@/lib/oauth/handle-reservation.server");
+    claims[HANDLE_RESERVATION_CLAIM] = await handleReservationClaim(userId, clientId, opts.sub);
   }
   return { sub: opts.sub, ...claims };
 }

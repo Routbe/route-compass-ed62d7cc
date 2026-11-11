@@ -92,6 +92,7 @@ const SCOPE_TEXT: Record<string, { icon: typeof User; text: string }> = {
     text: "auth.scope.linked_accounts",
   },
   "accounts:merge": { icon: ShieldCheck, text: "auth.scope.accountsMerge" },
+  "identity:handle_reservation": { icon: AtSign, text: "auth.scope.handleReservation" },
   "sybil:verify": { icon: Fingerprint, text: "auth.scope.sybil" },
   "profile:read": { icon: User, text: "auth.scope.profileRead" },
   "identity:legal_name": { icon: IdCard, text: "auth.scope.legalName" },

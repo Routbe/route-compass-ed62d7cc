@@ -319,5 +319,6 @@
   "auth.consent.bhm.provider": "Je {{provider}}-account",
   "auth.consent.bhm.none": "Niet samenvoegen, start als nieuw account",
   "auth.consent.incremental": "{{app}} vraagt nu extra toegang. Je eerdere toestemming blijft zoals ze is.",
-  "auth.consent.previously": "Eerder al gedeeld met {{app}}: {{count}} onderdelen. Intrekken kan bij Verbonden apps."
+  "auth.consent.previously": "Eerder al gedeeld met {{app}}: {{count}} onderdelen. Intrekken kan bij Verbonden apps.",
+  "auth.scope.handleReservation": "Je ROUT-@handle als gebruikersnaam gebruiken bij {{app}}. ROUT bevestigt alleen dat de naam echt van jou is."
 }

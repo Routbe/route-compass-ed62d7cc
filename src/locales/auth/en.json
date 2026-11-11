@@ -319,5 +319,6 @@
   "auth.consent.bhm.provider": "Your {{provider}} account",
   "auth.consent.bhm.none": "Don't merge, start as a new account",
   "auth.consent.incremental": "{{app}} now asks for extra access. Your earlier permission stays as it is.",
-  "auth.consent.previously": "Already shared with {{app}}: {{count}} items. You can revoke them under Connected apps."
+  "auth.consent.previously": "Already shared with {{app}}: {{count}} items. You can revoke them under Connected apps.",
+  "auth.scope.handleReservation": "Use your ROUT @handle as your username at {{app}}. ROUT only confirms the name really is yours."
 }

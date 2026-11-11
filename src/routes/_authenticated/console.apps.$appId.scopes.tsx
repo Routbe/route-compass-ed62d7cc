@@ -20,6 +20,12 @@ const SCOPES = [
     locked: false,
   },
   {
+    id: "identity:handle_reservation",
+    label: "identity:handle_reservation",
+    text: "Neem de geverifieerde @handle van het lid over als gebruikersnaam, zonder eigen anti-bot- of anti-squattingcontrole. ROUT controleert of het account actief en bevestigd is en of de naam uniek is.",
+    locked: false,
+  },
+  {
     id: "assets:write",
     label: "assets:write (agent)",
     text: "AI-agent maakt QR-codes en korte links voor het lid, binnen diens abonnement (anders HTTP 402). Token max. 1 uur geldig.",

@@ -319,5 +319,6 @@
   "auth.consent.bhm.provider": "Dein {{provider}}-Konto",
   "auth.consent.bhm.none": "Nicht zusammenführen, als neues Konto starten",
   "auth.consent.incremental": "{{app}} fragt jetzt nach zusätzlichem Zugriff. Deine frühere Zustimmung bleibt unverändert.",
-  "auth.consent.previously": "Bereits mit {{app}} geteilt: {{count}} Elemente. Widerrufen kannst du sie unter Verbundene Apps."
+  "auth.consent.previously": "Bereits mit {{app}} geteilt: {{count}} Elemente. Widerrufen kannst du sie unter Verbundene Apps.",
+  "auth.scope.handleReservation": "Deinen ROUT-@handle als Nutzernamen bei {{app}} verwenden. ROUT bestätigt nur, dass der Name wirklich dir gehört."
 }

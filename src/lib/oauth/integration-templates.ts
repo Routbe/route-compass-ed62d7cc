@@ -68,13 +68,14 @@ export const SCOPE_CLAIMS: Record<string, string[]> = {
   "sybil:verify": ["is_unique_human", "app_sybil_nullifier"],
   "identity:legal_name": ["first_name", "last_name", "full_legal_name"],
   "accounts:merge": ["rout_matched_account"],
+  "identity:handle_reservation": ["rout_handle_reservation"],
 };
 
 /** Every claim ROUT can ever send (advertised as `claims_supported` in discovery). */
 export const CLAIMS_SUPPORTED = [
   "sub", "iss", "aud", "exp", "iat", "nonce", "acr",
   "preferred_username", "name", "picture", "email", "email_verified",
-  "rout_handle", "rout_public_activity", "rout_matched_account",
+  "rout_handle", "rout_handle_reservation", "rout_public_activity", "rout_matched_account",
   "is_unique_human", "app_sybil_nullifier", "first_name", "last_name", "full_legal_name",
 ] as const;
 
@@ -92,6 +93,13 @@ export function featureInstructions(app: TemplateApp): Record<string, string[]> 
     out["email"] = [
       "- `email` + `email_verified` come from the id_token/userinfo. The member may pick a private relay address for your app; treat it as a normal address and never ask for the 'real' one.",
       "- Email sync (optional): if a webhook URL is registered in the ROUT console (Credentials), ROUT POSTs JSON `{ event: \"https://schemas.rout.be/events/user-email-updated\", sub, previous_email, new_email, updated_at }` with headers `x-rout-event: user.email_updated` and `x-rout-signature: t=<unix>,v1=<hex>`; v1 = HMAC-SHA256(ROUT_WEBHOOK_SECRET, `${t}.${rawBody}`). Verify in constant time, reject if |now - t| > 300 s, then update the email of the user whose rout_id = sub. `sub` is your app-specific id; no other user id is ever sent.",
+    ];
+  }
+  if (app.scopes.includes("identity:handle_reservation")) {
+    out["identity:handle_reservation"] = [
+      "- Handle reservation (`identity:handle_reservation`): the id_token and userinfo contain `rout_handle_reservation` = { status, handle?, verified_human, issued_at, binding? }. Only when status is \"reserved\" may you set the user's UNIQUE `username` to `handle` (lower-case) without your own anti-bot or anti-squatting checks; ROUT vouches it is the member's own root handle on an active, e-mail-confirmed account.",
+      "- Status \"unavailable\" or \"rate_limited\": do not adopt a name; fall back to your normal username flow and try again at the next login. Never accept the handle from client input.",
+      "- Integrity: store `binding` next to the username. It equals base64url(SHA-256(`rout-hr-v1|" + app.clientId + "|${sub}|${handle}`)); recompute it when you load the record and treat a mismatch as tampered data. Always link users by `sub`, never by the handle.",
     ];
   }
   if (app.scopes.includes("accounts:merge")) {
