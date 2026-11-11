@@ -3,9 +3,11 @@
 - [x] /about rewritten as sovereign identity platform (4 languages)
 - [x] Dev guides: blind-hash-matching, graduated-consent, email-sync-webhooks
 - [x] Consumer pages: connected-apps, no-account-lists
-- [ ] Console: team write access to apps (migration + saveOAuthClient/deleteOAuthClient)
-- [ ] Account & Security: email change UI with per-app selection
-- [ ] Scope identity:handle_reservation
-- [ ] Remove leftover linked_accounts texts in console
+- [x] Console: team write access to apps (app code)
+- [ ] Database rule db/0211_oauth_client_team_write.sql: written, waiting for owner OK to apply
+- [x] Account & Security: email change chooser with per-app selection and per-app results
+- [x] Scope identity:handle_reservation (id_token, userinfo, refresh; rate limited, integrity checked)
+- [x] Remove leftover linked_accounts texts and non-existent handle webhook from console, guides and AI prompts
 - [ ] Keys: WALLET_ID_SECRET, CARD_LIVENESS_SECRET, Google Wallet issuer (needs owner)
-- [ ] Signed-in browser test of console at 390/810/1280
+- [ ] Signed-in browser test of console at 390/810/1280 (needs a ROUT test account)
+- [ ] FR/DE versions of the new developer guides
