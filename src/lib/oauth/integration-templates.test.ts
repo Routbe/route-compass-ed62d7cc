@@ -53,7 +53,7 @@ describe("integration templates", () => {
   });
 });
 
-import { buildBadgePrompt, buildHandleSyncPrompt, handleUpdatedSample } from "./integration-templates";
+import { buildBadgePrompt, buildHandleSyncPrompt, emailUpdatedSample } from "./integration-templates";
 import { routHandleClaim } from "./handle-sync";
 
 describe("Universal Handle Sync", () => {
@@ -64,12 +64,17 @@ describe("Universal Handle Sync", () => {
   });
   it("prompts contain the real client_id and never a secret", () => {
     const app = { name: "Demo", clientId: "rout_abc123" };
-    for (const p of [buildHandleSyncPrompt(app), buildBadgePrompt(app), handleUpdatedSample(app.clientId)]) {
+    for (const p of [buildHandleSyncPrompt(app), buildBadgePrompt(app), emailUpdatedSample()]) {
       expect(p).not.toMatch(/rcs_|client_secret=/);
     }
     expect(buildHandleSyncPrompt(app)).toContain("rout_abc123");
-    expect(handleUpdatedSample(app.clientId)).toContain("rout_abc123");
   });
+  it("never mentions a handle-change webhook, which ROUT does not send", () => {
+    const app = { name: "Demo", clientId: "rout_abc123" };
+    expect(buildHandleSyncPrompt(app)).not.toMatch(/user\.handle\.updated|handle[- ]change webhook/i);
+  });
+  it("shows the real e-mail webhook event", () =>
+    expect(emailUpdatedSample()).toContain("https://schemas.rout.be/events/user-email-updated"));
 });
 
 import { CLAIMS_SUPPORTED } from "./integration-templates";
