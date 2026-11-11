@@ -8,7 +8,9 @@ import {
   STEP_UP_REQUIRED,
   allowedStepUpMethods,
   checkStepUpPayload,
+  methodAcceptedFor,
   stepUpPayload,
+  type EnrolledFactors,
   type StepUpAction,
   type StepUpMethod,
 } from "@/lib/auth/step-up-rules";
@@ -49,15 +51,31 @@ export async function verifyStepUpCookie(raw: string | null | undefined, userId:
   return checkStepUpPayload(payload, userId, nowSec);
 }
 
-export async function enrolledFactors(userId: string) {
+/** Sign-in factors of a member (public user id). Unknown facts count as absent. */
+export async function enrolledFactors(userId: string): Promise<EnrolledFactors & { authUserId: string | null }> {
   const { sql } = await import("@/lib/neon");
   const rows = (await sql`
-    select coalesce(bu."twoFactorEnabled", false) as totp,
-           exists (select 1 from neon_auth.passkey p where p."userId" = bu.id) as passkey
+    select bu.id::text as auth_id,
+           coalesce(bu."twoFactorEnabled", false) as totp,
+           exists (select 1 from neon_auth.passkey p where p."userId" = bu.id) as passkey,
+           exists (select 1 from neon_auth."twoFactor" t where t."userId" = bu.id and t."backupCodes" is not null and t."backupCodes" <> '[]') as backup,
+           exists (select 1 from neon_auth.account a where a."userId" = bu.id and a."providerId" = 'credential' and a.password is not null) as password
     from public.users u
     left join neon_auth."user" bu on bu.id::text = coalesce(u.auth_user_id::text, u.user_metadata->>'neon_auth_id')
-    where u.id = ${userId} limit 1`) as { totp: boolean | null; passkey: boolean | null }[];
-  return { totp: Boolean(rows[0]?.totp), passkey: Boolean(rows[0]?.passkey) };
+    where u.id = ${userId} limit 1`) as { auth_id: string | null; totp: boolean | null; passkey: boolean | null; backup: boolean | null; password: boolean | null }[];
+  const r = rows[0];
+  const totp = Boolean(r?.totp);
+  let sms = false;
+  try {
+    const { phoneStatus } = await import("@/lib/phone/phone-otp.server");
+    const { smsSecondFactorAvailable } = await import("./sign-in-policy");
+    const phone = await phoneStatus(userId);
+    sms = smsSecondFactorAvailable(phone.verified, phone.configured);
+  } catch {
+    sms = false;
+  }
+  // Recovery codes only belong to an active authenticator app.
+  return { authUserId: r?.auth_id ?? null, totp, passkey: Boolean(r?.passkey), sms, backup: totp && Boolean(r?.backup), password: Boolean(r?.password) };
 }
 
 /** Throws StepUpRequiredError (401) unless a fresh step-up proof exists. */
@@ -68,7 +86,9 @@ export async function ensureStepUpSession(userId: string, action: StepUpAction, 
     const { readRequestCookie } = await import("@/lib/request-context");
     raw = readRequestCookie(STEP_UP_COOKIE);
   }
-  const method = await verifyStepUpCookie(raw, userId);
+  const proof = await verifyStepUpCookie(raw, userId);
+  // A proof from a card-only factor (SMS, recovery code, password) never unlocks other actions.
+  const method = proof && methodAcceptedFor(action, proof) ? proof : null;
   if (!method) {
     if (!readCookie) {
       try {
@@ -85,8 +105,8 @@ export async function ensureStepUpSession(userId: string, action: StepUpAction, 
   return method;
 }
 
-export async function grantStepUp(userId: string, method: StepUpMethod, emitCookie?: (name: string, value: string) => void) {
-  const allowed = allowedStepUpMethods(await enrolledFactors(userId));
+export async function grantStepUp(userId: string, method: StepUpMethod, emitCookie?: (name: string, value: string) => void, action?: StepUpAction) {
+  const allowed = allowedStepUpMethods(await enrolledFactors(userId), action);
   if (!allowed.includes(method)) throw new Error("Deze verificatiemethode is niet toegestaan voor je account.");
   const value = await sign(stepUpPayload(userId, method, Math.floor(Date.now() / 1000)));
   if (emitCookie) emitCookie(STEP_UP_COOKIE, value);
@@ -102,4 +122,10 @@ export async function grantStepUp(userId: string, method: StepUpMethod, emitCook
   }
   const { recordSecurityEvent } = await import("@/lib/audit-log.server");
   void recordSecurityEvent({ eventType: "step_up.granted", userId, payload: { method } });
+}
+
+/** Spends the current proof, so the next sensitive view asks again. */
+export async function consumeStepUp() {
+  const { writeResponseCookie } = await import("@/lib/request-context");
+  writeResponseCookie(STEP_UP_COOKIE, "", { httpOnly: true, secure: true, sameSite: "strict", path: "/", maxAge: 0 });
 }
