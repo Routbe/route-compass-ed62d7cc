@@ -177,14 +177,14 @@ export function RoutCardDialog({ open, onOpenChange, handle, space, inline = fal
       try {
         const r = await loadSecure({ data: { space } });
         if (!alive) return;
-        if (!r || r.frozen) {
+        if (!r || r.frozen || r.locked || !r.url) {
           secure.current = { iat: 0, exp: 0 };
           setSecureUrl(null);
           settle();
           return;
         }
-        const skew = Date.now() - r.serverNow;
-        secure.current = { iat: r.iat + skew, exp: r.exp + skew };
+        const skew = Date.now() - (r.serverNow ?? Date.now());
+        secure.current = { iat: (r.iat ?? 0) + skew, exp: (r.exp ?? 0) + skew };
         setSecureUrl(r.url);
         settle();
         timer = setTimeout(() => void tick(), SECURE_ROTATE_MS);

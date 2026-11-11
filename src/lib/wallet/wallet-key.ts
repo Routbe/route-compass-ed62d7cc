@@ -69,7 +69,7 @@ export const KEY_TILE = "#0a0a0a";
 const same = (value: string) => createLocalizedString({ nl: value, en: value, fr: value, de: value });
 const text = (nl: string, en: string, fr: string, de: string) => createLocalizedString({ nl, en, fr, de });
 
-export function googleKeyClass(issuerId: string, smartTap: { redemptionIssuerId: string }, logoUrl: string): GoogleLoyaltyClass {
+export function googleKeyClass(issuerId: string, smartTap: { redemptionIssuerId: string } | null, logoUrl: string): GoogleLoyaltyClass {
   return {
     id: `${issuerId}.rout_sovereign_key`,
     issuerName: "ROUT",
@@ -79,8 +79,8 @@ export function googleKeyClass(issuerId: string, smartTap: { redemptionIssuerId:
     reviewStatus: "UNDER_REVIEW",
     localizedAccountNameLabel: text("Type", "Type", "Type", "Typ"),
     localizedAccountIdLabel: text("Sleutel", "Key", "Clé", "Schlüssel"),
-    enableSmartTap: true,
-    redemptionIssuers: [smartTap.redemptionIssuerId],
+    // NFC joins once Google approves Smart Tap; the rotating QR works without it.
+    ...(smartTap ? { enableSmartTap: true, redemptionIssuers: [smartTap.redemptionIssuerId] } : {}),
     classTemplateInfo: { cardTemplateOverride: { cardRowTemplateInfos: [
       { oneItem: { item: { firstValue: { fields: [{ fieldPath: "object.accountName" }] } } } },
       { oneItem: { item: { firstValue: { fields: [{ fieldPath: "object.accountId" }] } } } },
@@ -89,14 +89,15 @@ export function googleKeyClass(issuerId: string, smartTap: { redemptionIssuerId:
 }
 
 /** Key object: no fixed barcode, no handle, no profile link; NFC token plus a Google-rotated TOTP QR. */
-export function googleKeyObject(key: WalletKeyPayload, issuerId: string): GoogleLoyaltyObject {
+export function googleKeyObject(key: WalletKeyPayload, issuerId: string, opts: { nfc?: boolean; manageUrl?: string } = { nfc: true }): GoogleLoyaltyObject {
   return {
     id: `${issuerId}.${key.serial}`,
     classId: `${issuerId}.rout_sovereign_key`,
     state: "ACTIVE",
     accountName: "NFC · Hardware key",
     accountId: `•••• ${key.label}`,
-    smartTapRedemptionValue: key.token,
+    ...(opts.nfc !== false ? { smartTapRedemptionValue: key.token } : {}),
+    ...(opts.manageUrl ? { linksModuleData: { uris: [{ id: "manage", uri: opts.manageUrl, localizedDescription: text("Kaart beheren, bevriezen of vervangen", "Manage, freeze or replace card", "Gérer, geler ou remplacer la carte", "Karte verwalten, sperren oder ersetzen") }] } } : {}),
     ...(key.totp ? { rotatingBarcode: {
       type: "QR_CODE" as const,
       valuePattern: keyQrPattern(key.totp.keyId),
@@ -119,13 +120,13 @@ export function googleKeyObject(key: WalletKeyPayload, issuerId: string): Google
   };
 }
 
-export function googleKeySaveClaims(key: WalletKeyPayload, cfg: { issuerId: string; serviceAccountEmail: string; origins: string[]; logoUrl: string; smartTap: { redemptionIssuerId: string } }): GoogleCardClaims {
+export function googleKeySaveClaims(key: WalletKeyPayload, cfg: { issuerId: string; serviceAccountEmail: string; origins: string[]; logoUrl: string; smartTap: { redemptionIssuerId: string } | null; manageUrl?: string }): GoogleCardClaims {
   return {
     iss: cfg.serviceAccountEmail,
     aud: "google",
     typ: "savetowallet",
     origins: cfg.origins,
-    payload: { loyaltyClasses: [googleKeyClass(cfg.issuerId, cfg.smartTap, cfg.logoUrl)], loyaltyObjects: [googleKeyObject(key, cfg.issuerId)] },
+    payload: { loyaltyClasses: [googleKeyClass(cfg.issuerId, cfg.smartTap, cfg.logoUrl)], loyaltyObjects: [googleKeyObject(key, cfg.issuerId, { nfc: !!cfg.smartTap, manageUrl: cfg.manageUrl })] },
   };
 }
 
