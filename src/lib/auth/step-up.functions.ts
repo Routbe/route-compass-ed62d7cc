@@ -1,7 +1,7 @@
 import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
 import { requireAuth } from "@/lib/auth/middleware";
-import { STEP_UP_MAX_AGE_SEC, allowedStepUpMethods, isCardStepUpAction, type StepUpAction } from "@/lib/auth/step-up-rules";
+import { allowedStepUpMethods, isCardStepUpAction, type StepUpAction } from "@/lib/auth/step-up-rules";
 
 const actionInput = z.enum(["card_reveal", "card_lifecycle"]).optional();
 
@@ -11,7 +11,8 @@ export const getStepUpOptions = createServerFn({ method: "GET" })
   .inputValidator((d: unknown) => z.object({ action: actionInput }).strict().optional().parse(d))
   .handler(async ({ data, context }) => {
     const { enrolledFactors } = await import("./step-up.server");
-    const { authUserId: _authUserId, ...enrolled } = await enrolledFactors(context.userId);
+    const f = await enrolledFactors(context.userId);
+    const enrolled = { passkey: f.passkey, totp: f.totp, sms: !!f.sms, backup: !!f.backup, password: !!f.password };
     return { methods: allowedStepUpMethods(enrolled, data?.action), enrolled };
   });
 
@@ -145,4 +146,3 @@ export const refreshSessionFreshness = createServerFn({ method: "POST" })
     return { ok: true as const };
   });
 
-export { STEP_UP_MAX_AGE_SEC };

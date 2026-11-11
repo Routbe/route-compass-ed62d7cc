@@ -6,7 +6,7 @@ import { generateOtp } from "@/lib/phone/otp-rules";
  * Six-digit e-mail codes for sensitive account changes (merge, password,
  * 2FA). Stored only as digests, 10 minutes, max 5 tries, single use.
  */
-export type SecurityPurpose = "merge" | "password" | "two_factor" | "workspace_convert" | "delete_account" | "identity_link" | "step_up";
+export type SecurityPurpose = "merge" | "password" | "two_factor" | "workspace_convert" | "delete_account" | "identity_link" | "step_up" | "step_up_sms";
 
 const TTL_MIN = 10;
 const MAX_ATTEMPTS = 5;
@@ -37,6 +37,22 @@ export async function issueSecurityCode(userId: string, purpose: SecurityPurpose
   const { sendLocalizedEmail, localeFromRequest } = await import("@/lib/email.server");
   await sendLocalizedEmail({ to: email, intent: "verification", locale: localeFromRequest(request ?? null), payload: { code } });
   return { ok: true as const, sentTo: maskEmail(email) };
+}
+
+/** Six-digit step-up code by SMS to the member's verified number (ROUT card actions only). */
+export async function issueSmsSecurityCode(userId: string, authUserId: string) {
+  const purpose: SecurityPurpose = "step_up_sms";
+  const { hitRateLimit } = await import("@/lib/rate-limit-db.server");
+  const limit = await hitRateLimit("security-code", `${userId}:${purpose}`, { limit: 5, windowSec: 15 * 60 }, { failClosed: true });
+  if (!limit.ok) return { ok: false as const, reason: "rate_limited" as const };
+  const code = generateOtp();
+  await sql`update public.security_codes set consumed_at = now()
+    where user_id = ${userId} and purpose = ${purpose} and consumed_at is null`;
+  await sql`insert into public.security_codes (user_id, purpose, code_hash, expires_at)
+    values (${userId}, ${purpose}, ${await hashToken(`${userId}:${purpose}:${code}`)}, now() + make_interval(mins => ${TTL_MIN}))`;
+  const { sendSecondFactorSms } = await import("@/lib/auth/second-factor.server");
+  if (!(await sendSecondFactorSms(authUserId, code))) return { ok: false as const, reason: "not_sent" as const };
+  return { ok: true as const };
 }
 
 /** Deletes codes that expired over 30 minutes ago or were already used. */
