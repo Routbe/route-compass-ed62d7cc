@@ -2,9 +2,9 @@ import { createFileRoute, Link } from "@tanstack/react-router";
 import { AppLayout } from "@/components/layout/AppLayout";
 import { CodeBlock } from "@/components/CodeBlock";
 import { RoutButtonKit } from "@/components/dev/RoutButtonKit";
-import { DISCOVERY_URL, handleUpdatedSample, WEBHOOK_VERIFY_SNIPPET } from "@/lib/oauth/integration-templates";
+import { DISCOVERY_URL, emailUpdatedSample, WEBHOOK_VERIFY_SNIPPET } from "@/lib/oauth/integration-templates";
 
-const HANDLE_SAMPLE = handleUpdatedSample("rout_your_client_id");
+const EMAIL_SAMPLE = emailUpdatedSample();
 import { RATE_RULES } from "@/lib/rate-limit-rules";
 import { Trans } from "react-i18next";
 import { useI18n } from "@/lib/i18n";
@@ -200,8 +200,7 @@ function DevelopersPage() {
                   <tr><td className="p-3 font-mono">openid</td><td className="p-3 text-muted-foreground"><Rich k="claims.openid" /></td></tr>
                   <tr><td className="p-3 font-mono">profile</td><td className="p-3 text-muted-foreground"><Rich k="claims.profile" /></td></tr>
                   <tr><td className="p-3 font-mono">email</td><td className="p-3 text-muted-foreground"><code>email</code>, <code>email_verified</code></td></tr>
-                  <tr><td className="p-3 font-mono">linked_accounts</td><td className="p-3 text-muted-foreground">{t("claims.linked")}</td></tr>
-                  <tr><td className="p-3 font-mono">Rich Identity</td><td className="p-3 text-muted-foreground"><Rich k="claims.rich" /></td></tr>
+                                    <tr><td className="p-3 font-mono">Rich Identity</td><td className="p-3 text-muted-foreground"><Rich k="claims.rich" /></td></tr>
                 </tbody>
               </table>
             </div>
@@ -226,7 +225,7 @@ function DevelopersPage() {
             <h2>{t("sync.title")}</h2>
             <p><Rich k="sync.p1" /></p>
             <p><Rich k="sync.p2" /></p>
-            <CodeBlock code={HANDLE_SAMPLE} language="json" />
+            <CodeBlock code={EMAIL_SAMPLE} language="json" />
             <CodeBlock code={WEBHOOK_VERIFY_SNIPPET} language="javascript" />
           </section>
 

@@ -41,7 +41,7 @@ export type TemplateApp = {
   requirePkce: boolean;
   richIdentityEnabled: boolean;
   accountDiscoveryEnabled: boolean;
-  /** Universal Handle Sync: `rout_handle` claim + `user.handle.updated` webhook. */
+  /** Universal Handle Sync: `rout_handle` claim, refreshed on every login. */
   handleSyncEnabled?: boolean;
 };
 
@@ -121,7 +121,7 @@ export function featureInstructions(app: TemplateApp): Record<string, string[]> 
   if (app.handleSyncEnabled) {
     out["handle"] = [
       "- Universal Handle Sync is enabled: the `rout_handle` claim (requires the `profile` scope) is the user's username. Add a UNIQUE `username` column, set it from `rout_handle` on every login, and do NOT build a separate username picker or let users edit it.",
-      "- ROUT does not send handle-change webhooks yet: refresh `username` from `rout_handle` on every login. Do not build a handle webhook until ROUT announces it.",
+      "- Refresh `username` from `rout_handle` on every login and always look users up by `sub`, never by the handle.",
     ];
   }
   if (app.accountDiscoveryEnabled) {
@@ -253,7 +253,7 @@ export function buildHandleSyncPrompt(app: PromptApp, tool: AiTool = "generic", 
     `I am building an app ("${app.name}") and want to integrate 'Login with ROUT' as my authentication and identity provider.`,
     `Please build the standard OIDC OAuth2 flow using the discovery URL: \`${DISCOVERY_URL}\`.`,
     `My Client ID is: ${app.clientId}.`,
-    "CRITICAL REQUIREMENT: Do not build a custom username system. Instead, extract the `rout_handle` claim from ROUT's UserInfo endpoint and map it directly as the primary unique `username` field in our database. Refresh it from `rout_handle` on every login (ROUT does not send handle-change webhooks yet; do not build one).",
+    "CRITICAL REQUIREMENT: Do not build a custom username system. Instead, extract the `rout_handle` claim from ROUT's UserInfo endpoint and map it directly as the primary unique `username` field in our database. Refresh it from `rout_handle` on every login and always look users up by `sub`.",
     "",
     "## Configuration",
     "- Request the exact registered redirect URI before enabling the button. Confidential clients use ROUT_CLIENT_SECRET server-side; public clients use PKCE without a secret.",
@@ -321,14 +321,15 @@ export function verifyRoutSignature(rawBody: string, header: string, secret: str
   return got.length === 32 && timingSafeEqual(got, Buffer.from(expected, "hex"));
 }`;
 
-export function handleUpdatedSample(clientId: string): string {
+/** Body of the one webhook ROUT sends today (backchannel.ts `emailUpdatedEvent`). */
+export function emailUpdatedSample(): string {
   return JSON.stringify(
     {
-      id: "evt_01J9Z8K3QH4M2N",
-      type: "user.handle.updated",
-      created_at: "2026-10-10T10:40:00Z",
-      client_id: clientId,
-      data: { sub: "pw_3kq9…(app-specific)", previous_handle: "oldname", rout_handle: "newname" },
+      event: "https://schemas.rout.be/events/user-email-updated",
+      sub: "pw_3kq9…(app-specific)",
+      previous_email: "old@example.com",
+      new_email: "new@example.com",
+      updated_at: 1791628800,
     },
     null,
     2,
