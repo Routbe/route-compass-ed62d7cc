@@ -35,6 +35,7 @@ import { useEditorialMotion } from "@/hooks/useEditorialMotion";
 import { SovereignVisual } from "@/components/gateway/SovereignVisual";
 import everydayImage from "@/assets/rout-qr-everyday-refined.jpg";
 import { ProfileScene, QrScene, AnalyticsScene, SocialScene, WorkspaceScene, DeveloperScene } from "@/components/gateway/StoryVisuals";
+import { HomeSections } from "@/components/gateway/HomeSections";
 import { IdentityVisual, WalletVisual, CommerceVisual, IntegrationMesh } from "@/components/gateway/InfrastructureVisuals";
 
 const TYPING_KEYS = ["gateway.typing.qr", "gateway.typing.handle", "gateway.typing.paste"] as const;
@@ -210,6 +211,8 @@ export default function Gateway() {
         </div>
         <div className="sovereign-domains" aria-hidden>{["identity", "wallet", "social", "analytics"].map(key => <span key={key}>{t(`story.${key}.short`)}</span>)}</div>
       </section>
+
+      <HomeSections />
 
       <section id="ecosystem" className="story-intro story-section scroll-mt-20">
         <Reveal className="story-inner">
