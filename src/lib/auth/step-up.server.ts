@@ -126,6 +126,6 @@ export async function grantStepUp(userId: string, method: StepUpMethod, emitCook
 
 /** Spends the current proof, so the next sensitive view asks again. */
 export async function consumeStepUp() {
-  const { writeResponseCookie } = await import("@/lib/request-context");
-  writeResponseCookie(STEP_UP_COOKIE, "", { httpOnly: true, secure: true, sameSite: "strict", path: "/", maxAge: 0 });
+  const { clearResponseCookie } = await import("@/lib/request-context");
+  clearResponseCookie(STEP_UP_COOKIE, { path: "/" });
 }
