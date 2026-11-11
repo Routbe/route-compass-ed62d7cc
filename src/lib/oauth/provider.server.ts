@@ -415,11 +415,17 @@ export async function userMayUseClient(
 ): Promise<boolean> {
   if (client.publishingStatus === "production") return true;
   if (SYSTEM_CLIENT_IDS.has(client.clientId)) return true;
-  const owner = (await sql`select owner_user_id from public.oauth_clients
-    where client_id = ${client.clientId} limit 1`) as Row[];
+  const owner = (await sql`select c.owner_user_id, c.workspace_id,
+      exists (select 1 from public.workspace_members m
+        where m.workspace_id = c.workspace_id and m.user_id = ${user.id}
+          and m.role::text = any(${[...APP_EDITOR_ROLES]})) as team_developer
+    from public.oauth_clients c
+    where c.client_id = ${client.clientId} limit 1`) as Row[];
   // Platform login (owner null) is ROUT's own sign-in, not a developer app.
-  if (owner[0] && owner[0]["owner_user_id"] == null) return true;
+  if (owner[0] && owner[0]["owner_user_id"] == null && owner[0]["workspace_id"] == null) return true;
   if (String(owner[0]?.["owner_user_id"]) === user.id) return true;
+  // Teammates with developer rights may test a workspace app before it goes live.
+  if (owner[0]?.["team_developer"] === true) return true;
   let handles: Row[] = [];
   try {
     handles = (await sql`select lower(username) as h from public.profiles
