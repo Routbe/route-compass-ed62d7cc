@@ -505,7 +505,13 @@ export const pairMyPhysicalKey = createServerFn({ method: "POST" })
 export const setMyPhysicalKeyStatus = createServerFn({ method: "POST" })
   .middleware([requireAuth])
   .inputValidator((d: unknown) => z.object({ hardwareId: z.string().uuid(), status: z.enum(["active", "frozen", "revoked"]) }).parse(d))
-  .handler(async ({ data }) => {
+  .handler(async ({ data, context }) => {
+    // Freezing/revoking a key is always instant; switching one back on needs the unlocked card.
+    if (data.status === "active") {
+      const { memberHasTwoFactor } = await import("./card-owner.server");
+      const { cardUnlockedUntil } = await import("./card-unlock.server");
+      if (!(await memberHasTwoFactor(context.userId)) || !(await cardUnlockedUntil(context.userId))) return { ok: false };
+    }
     const { setMyKeyStatus } = await import("./card-freeze.server");
     return { ok: await setMyKeyStatus(data.hardwareId, data.status) };
   });
