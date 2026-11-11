@@ -319,5 +319,6 @@
   "auth.consent.bhm.provider": "Votre compte {{provider}}",
   "auth.consent.bhm.none": "Ne pas fusionner, créer un nouveau compte",
   "auth.consent.incremental": "{{app}} demande maintenant un accès supplémentaire. Ton autorisation précédente reste inchangée.",
-  "auth.consent.previously": "Déjà partagé avec {{app}} : {{count}} éléments. Tu peux les révoquer dans Applications connectées."
+  "auth.consent.previously": "Déjà partagé avec {{app}} : {{count}} éléments. Tu peux les révoquer dans Applications connectées.",
+  "auth.scope.handleReservation": "Utiliser ton @handle ROUT comme nom d'utilisateur chez {{app}}. ROUT confirme seulement que ce nom est bien le tien."
 }

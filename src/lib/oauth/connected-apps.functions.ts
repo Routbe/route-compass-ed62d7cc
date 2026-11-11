@@ -143,3 +143,63 @@ export const bulkUpdateAppEmails = createServerFn({ method: "POST" })
     }
     return { updated: changes.length };
   });
+
+export type AppEmailPushResult = {
+  clientId: string;
+  email: string | null;
+  outcome: import("./email-push").PushOutcome;
+};
+
+/**
+ * "Connect with ROUT" e-mail manager: gives the selected apps one chosen address
+ * (`primary`, an alias id, or `relay` = a private relay unique per app), then
+ * notifies each app's webhook and reports per app what happened.
+ */
+export const pushAppEmail = createServerFn({ method: "POST" })
+  .middleware([requireAuth])
+  .inputValidator((d) =>
+    z.object({ choiceId: z.string().min(1).max(64), clientIds: z.array(z.string().min(1).max(200)).min(1).max(200) }).strict().parse(d),
+  )
+  .handler(async ({ data, context }): Promise<{ results: AppEmailPushResult[] }> => {
+    const { requirePasskeyStepUp } = await import("@/lib/auth/step-up-guard.server");
+    await requirePasskeyStepUp(context.userId, "app_email_reassign");
+    const { sql } = await import("@/lib/neon");
+    const { assignAppEmail } = await import("./email-broker.server");
+    const { pushOutcome } = await import("./email-push");
+    const ids = [...new Set(data.clientIds)];
+    const consented = new Set(((await sql`select client_id from public.oauth_consents where user_id = ${context.userId}
+      and revoked_at is null and 'email' = any(scopes) and client_id = any(${ids})`) as Record<string, unknown>[]).map((r) => String(r["client_id"])));
+    const beforeRows = (await sql`select client_id, assigned_email from public.app_email_assignments
+      where user_id = ${context.userId} and client_id = any(${[...consented]})`) as Record<string, unknown>[];
+    const before = new Map(beforeRows.map((r) => [String(r["client_id"]), (r["assigned_email"] as string | null) ?? null]));
+    const available = new Set<string>();
+    for (const clientId of consented) {
+      try {
+        await assignAppEmail(context.userId, clientId, data.choiceId);
+        available.add(clientId);
+      } catch {
+        // email_choice_unavailable: this app keeps its current address.
+      }
+    }
+    const afterRows = (await sql`select client_id, assigned_email from public.app_email_assignments
+      where user_id = ${context.userId} and client_id = any(${[...available]})`) as Record<string, unknown>[];
+    const after = new Map(afterRows.map((r) => [String(r["client_id"]), (r["assigned_email"] as string | null) ?? null]));
+    const changes = [...available]
+      .filter((id) => after.get(id) && (before.get(id) ?? "").toLowerCase() !== String(after.get(id)).toLowerCase())
+      .map((id) => ({ clientId: id, previousEmail: before.get(id) ?? "", newEmail: String(after.get(id)) }));
+    const { deliverEmailUpdated } = await import("@/lib/auth/email-sync-webhook.server");
+    const delivery = await deliverEmailUpdated(context.userId, changes);
+    return {
+      results: ids.map((clientId) => ({
+        clientId,
+        email: after.get(clientId) ?? before.get(clientId) ?? null,
+        outcome: pushOutcome({
+          consented: consented.has(clientId),
+          available: available.has(clientId),
+          previous: before.get(clientId) ?? null,
+          next: after.get(clientId) ?? null,
+          delivery: delivery.get(clientId) ?? "none",
+        }),
+      })),
+    };
+  });

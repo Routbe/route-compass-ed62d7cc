@@ -17,3 +17,8 @@ describe("client_credentials", () => {
     expect(m2mScopes("api", ["api"])).toEqual(["api"]);
   });
 });
+
+describe("handle reservation never reaches a machine token", () => {
+  it("rejects identity:handle_reservation in client_credentials", () =>
+    expect(m2mScopes("identity:handle_reservation", ["identity:handle_reservation", "api"])).toBeNull());
+});

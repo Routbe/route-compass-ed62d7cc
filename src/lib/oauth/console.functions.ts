@@ -100,7 +100,7 @@ export const saveOAuthClient = createServerFn({ method: "POST" })
     };
     return friendly(async () => {
       if (data.id) {
-        return { client: await updateClient(context.userId, data.id, input), clientSecret: null };
+        return { client: await updateClient({ userId: context.userId, workspaceId: context.activeWorkspaceId ?? null }, data.id, input), clientSecret: null };
       }
       const { ensureStepUpSession } = await import("@/lib/auth/step-up.server");
       await ensureStepUpSession(context.userId, "oauth_secret");
@@ -132,7 +132,7 @@ export const saveOAuthClientSettings = createServerFn({ method: "POST" })
       ...(rest.dpoEmail !== undefined ? { dpoEmail: rest.dpoEmail?.toLowerCase() || null } : {}),
       ...(rest.legalOwner !== undefined ? { legalOwner: rest.legalOwner || null } : {}),
     };
-    return friendly(() => updateClientSettings(context.userId, id, settings));
+    return friendly(() => updateClientSettings({ userId: context.userId, workspaceId: context.activeWorkspaceId ?? null }, id, settings));
   });
 
 export const deleteOAuthClient = createServerFn({ method: "POST" })
@@ -141,7 +141,7 @@ export const deleteOAuthClient = createServerFn({ method: "POST" })
   .handler(async ({ data, context }) => {
     await assertVerified(context.userId);
     const { deleteClient } = await import("./provider.server");
-    await deleteClient(context.userId, data.id);
+    await deleteClient({ userId: context.userId, workspaceId: context.activeWorkspaceId ?? null }, data.id);
     return { ok: true };
   });
 
@@ -157,7 +157,7 @@ export const upgradeOAuthClientToPairwise = createServerFn({ method: "POST" })
     const { ensureStepUpSession } = await import("@/lib/auth/step-up.server");
     await ensureStepUpSession(context.userId, "oauth_subject_type");
     const { upgradeClientToPairwise } = await import("./provider.server");
-    const client = await friendly(async () => upgradeClientToPairwise(context.userId, data.id));
+    const client = await friendly(async () => upgradeClientToPairwise({ userId: context.userId, workspaceId: context.activeWorkspaceId ?? null }, data.id));
     return { ok: true as const, subjectType: client.subjectType };
   });
 
@@ -170,7 +170,7 @@ export const rotateOAuthSecret = createServerFn({ method: "POST" })
     await ensureStepUpSession(context.userId, "oauth_secret");
     const { rotateClientSecret } = await import("./provider.server");
     return friendly(async () => {
-      const clientSecret = await rotateClientSecret(context.userId, data.id);
+      const clientSecret = await rotateClientSecret({ userId: context.userId, workspaceId: context.activeWorkspaceId ?? null }, data.id);
       const { later, recipient, sendSiteMail, siteOrigin } = await import("@/lib/site-mail.server");
       later(async () => {
         const { sql } = await import("@/lib/neon");
@@ -189,10 +189,8 @@ export const setOAuthBackchannelWebhook = createServerFn({ method: "POST" })
   .inputValidator((data: unknown) => z.object({ id: z.string().uuid(), url: z.string().url().max(2048).nullable() }).parse(data))
   .handler(async ({ data, context }) => {
     await assertVerified(context.userId);
-    const { sql } = await import("@/lib/neon");
-    const rows = (await sql`select client_id from public.oauth_clients where id = ${data.id} and owner_user_id = ${context.userId} limit 1`) as Record<string, unknown>[];
-    const clientId = rows[0]?.["client_id"];
-    if (typeof clientId !== "string") throw new Error("App niet gevonden.");
+    const { manageableClientId } = await import("./provider.server");
+    const clientId = await friendly(() => manageableClientId({ userId: context.userId, workspaceId: context.activeWorkspaceId ?? null }, data.id));
     const { setBackchannelWebhook } = await import("@/lib/auth/email-sync-webhook.server");
     return setBackchannelWebhook(clientId, data.url);
   });
@@ -204,8 +202,8 @@ export const getOAuthClientInsights = createServerFn({ method: "POST" })
     await assertVerified(context.userId);
     const { clientInsights, latestVerification } = await import("./provider.server");
     return friendly(async () => ({
-      ...(await clientInsights(context.userId, data.id)),
-      verification: await latestVerification(context.userId, data.id),
+      ...(await clientInsights({ userId: context.userId, workspaceId: context.activeWorkspaceId ?? null }, data.id)),
+      verification: await latestVerification({ userId: context.userId, workspaceId: context.activeWorkspaceId ?? null }, data.id),
     }));
   });
 
@@ -215,7 +213,7 @@ export const listOAuthTestUsers = createServerFn({ method: "POST" })
   .handler(async ({ data, context }) => {
     await assertVerified(context.userId);
     const { listTestUsers } = await import("./provider.server");
-    return friendly(() => listTestUsers(context.userId, data.id));
+    return friendly(() => listTestUsers({ userId: context.userId, workspaceId: context.activeWorkspaceId ?? null }, data.id));
   });
 
 export const addOAuthTestUser = createServerFn({ method: "POST" })
@@ -224,7 +222,7 @@ export const addOAuthTestUser = createServerFn({ method: "POST" })
   .handler(async ({ data, context }) => {
     await assertVerified(context.userId);
     const { addTestUser } = await import("./provider.server");
-    await friendly(() => addTestUser(context.userId, data.id, data.identifier));
+    await friendly(() => addTestUser({ userId: context.userId, workspaceId: context.activeWorkspaceId ?? null }, data.id, data.identifier));
     return { ok: true };
   });
 
@@ -234,7 +232,7 @@ export const removeOAuthTestUser = createServerFn({ method: "POST" })
   .handler(async ({ data, context }) => {
     await assertVerified(context.userId);
     const { removeTestUser } = await import("./provider.server");
-    await friendly(() => removeTestUser(context.userId, data.id, data.identifier));
+    await friendly(() => removeTestUser({ userId: context.userId, workspaceId: context.activeWorkspaceId ?? null }, data.id, data.identifier));
     return { ok: true };
   });
 
@@ -244,7 +242,7 @@ export const requestOAuthVerification = createServerFn({ method: "POST" })
   .handler(async ({ data, context }) => {
     await assertVerified(context.userId);
     const { requestVerification } = await import("./provider.server");
-    await friendly(() => requestVerification(context.userId, data.id, data.note ?? ""));
+    await friendly(() => requestVerification({ userId: context.userId, workspaceId: context.activeWorkspaceId ?? null }, data.id, data.note ?? ""));
     const { later, sendSiteMail, siteOrigin } = await import("@/lib/site-mail.server");
     later(async () => {
       const { sql } = await import("@/lib/neon");

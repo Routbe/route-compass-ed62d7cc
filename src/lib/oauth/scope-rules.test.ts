@@ -29,7 +29,7 @@ describe("scope whitelist (Cluster C)", () => {
 
   it("whitelist contains exactly the documented scopes", () => {
     expect([...SUPPORTED_SCOPES].sort()).toEqual(
-      ["openid", "profile", "email", "linked_accounts", "accounts:merge", "offline_access", "sybil:verify", "profile:read", "identity:legal_name", "identity:national_id", "assets:write", "profile:draft", "identity:read_public"].sort(),
+      ["openid", "profile", "email", "linked_accounts", "accounts:merge", "offline_access", "sybil:verify", "profile:read", "identity:legal_name", "identity:national_id", "identity:handle_reservation", "assets:write", "profile:draft", "identity:read_public"].sort(),
     );
   });
 });

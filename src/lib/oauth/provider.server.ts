@@ -24,6 +24,9 @@ async function secretPepper(): Promise<string> {
 }
 import { canonicalAppUrl } from "@/lib/app-url";
 import { SUPPORTED_SCOPES } from "./scope-rules";
+import { HANDLE_RESERVATION_CLAIM, HANDLE_RESERVATION_SCOPE } from "./handle-reservation";
+import { APP_ADMIN_ROLES, APP_EDITOR_ROLES, canManageClient, type ClientActor } from "./client-access";
+export type { ClientActor };
 
 // The whitelist lives in pure scope-rules.ts (Cluster C); re-exported here so
 // existing imports keep working.
@@ -252,12 +255,12 @@ export async function createClient(
 }
 
 export async function updateClient(
-  ownerUserId: string,
+  actor: ClientActor,
   id: string,
   input: ClientInput,
 ): Promise<OAuthClient> {
   const { name, uris, logoutUris, scopes } = sanitize(input);
-  const current = await getClientByClientId(String((await sql`select client_id from public.oauth_clients where id=${id} and owner_user_id=${ownerUserId}`)[0]?.["client_id"] ?? ""));
+  const current = toClient(await manageableClientRow(actor, id));
   if (current?.subjectType === "pairwise" && uris.some((uri) => redirectSector(uri) !== current.sectorId)) {
     throw new OAuthError("invalid_client_metadata", "De pairwise redirect-host kan niet stilzwijgend wijzigen.");
   }
@@ -271,7 +274,7 @@ export async function updateClient(
       rich_identity_enabled = coalesce(${input.richIdentityEnabled ?? null}::boolean, rich_identity_enabled),
       handle_sync_enabled = coalesce(${input.handleSyncEnabled ?? null}::boolean, handle_sync_enabled),
       updated_at = now()
-    where id = ${id} and owner_user_id = ${ownerUserId} returning *`) as Row[];
+    where id = ${id} returning *`) as Row[];
   if (!rows[0]) throw new OAuthError("not_found", "Deze app bestaat niet (meer).");
   return toClient(rows[0]);
 }
@@ -279,13 +282,11 @@ export async function updateClient(
 /**
  * One-way opt-in for legacy clients: `public` → `pairwise` subjects. Existing
  * users of this app get a new, uncorrelatable `sub` after the switch — that is
- * exactly why only the app owner can request it and it can never be undone.
+ * exactly why only the app owner (or a workspace owner/admin) can request it and it can never be undone.
  * The sector is derived from the registered redirect host and locked in.
  */
-export async function upgradeClientToPairwise(ownerUserId: string, id: string): Promise<OAuthClient> {
-  const current = (await sql`select * from public.oauth_clients where id = ${id} and owner_user_id = ${ownerUserId} limit 1`) as Row[];
-  const row = current[0];
-  if (!row) throw new OAuthError("not_found", "Deze app bestaat niet (meer).");
+export async function upgradeClientToPairwise(actor: ClientActor, id: string): Promise<OAuthClient> {
+  const row = await manageableClientRow(actor, id, APP_ADMIN_ROLES);
   if (row["subject_type"] === "pairwise") return toClient(row);
   const uris = (row["redirect_uris"] as string[] | null) ?? [];
   if (!uris.length) throw new OAuthError("invalid_client_metadata", "Registreer eerst een redirect-adres.");
@@ -294,7 +295,7 @@ export async function upgradeClientToPairwise(ownerUserId: string, id: string): 
   const sectorId = redirectSector(uris[0]!);
   const updated = (await sql`update public.oauth_clients
       set subject_type = 'pairwise', sector_id = ${sectorId}, updated_at = now()
-      where id = ${id} and owner_user_id = ${ownerUserId} and subject_type = 'public'
+      where id = ${id} and subject_type = 'public'
       returning *`) as Row[];
   if (!updated[0]) throw new OAuthError("invalid_client_metadata", "Deze app gebruikt al pairwise subjects.");
   return toClient(updated[0]);
@@ -313,14 +314,11 @@ export type ClientSettings = Partial<{
 }>;
 
 export async function updateClientSettings(
-  ownerUserId: string,
+  actor: ClientActor,
   id: string,
   s: ClientSettings,
 ): Promise<OAuthClient> {
-  const current = (await sql`select * from public.oauth_clients
-    where id = ${id} and owner_user_id = ${ownerUserId} limit 1`) as Row[];
-  if (!current[0]) throw new OAuthError("not_found", "Deze app bestaat niet (meer).");
-  const c = toClient(current[0]);
+  const c = toClient(await manageableClientRow(actor, id));
   const next = {
     publishingStatus: s.publishingStatus ?? c.publishingStatus,
     supportEmail: s.supportEmail !== undefined ? s.supportEmail : c.supportEmail,
@@ -346,28 +344,53 @@ export async function updateClientSettings(
       require_pkce = ${next.requirePkce}, access_token_ttl = ${next.accessTokenTtl},
       allowed_ips = ${next.allowedIps}, account_discovery_enabled = ${next.accountDiscoveryEnabled},
       updated_at = now()
-    where id = ${id} and owner_user_id = ${ownerUserId} returning *`) as Row[];
+    where id = ${id} returning *`) as Row[];
   return toClient(rows[0]!);
 }
 
-async function ownedClientId(ownerUserId: string, id: string): Promise<string> {
-  const rows = (await sql`select client_id from public.oauth_clients
-    where id = ${id} and owner_user_id = ${ownerUserId} limit 1`) as Row[];
-  if (!rows[0]) throw new OAuthError("not_found", "Deze app bestaat niet (meer).");
-  return String(rows[0]["client_id"]);
+/**
+ * Loads an app the actor may manage: a personal app of the caller, or an app of
+ * the active workspace when the caller holds one of `roles` there (client-access.ts).
+ * Anything else reads as "not found" so app ids of other teams are not confirmed.
+ */
+async function manageableClientRow(
+  actor: ClientActor,
+  id: string,
+  roles: readonly string[] = APP_EDITOR_ROLES,
+): Promise<Row> {
+  const rows = (await sql`select c.*, (select m.role::text from public.workspace_members m
+      where m.workspace_id = c.workspace_id and m.user_id = ${actor.userId} limit 1) as actor_role
+    from public.oauth_clients c where c.id = ${id} limit 1`) as Row[];
+  const row = rows[0];
+  const ownership = {
+    ownerUserId: (row?.["owner_user_id"] as string | null | undefined) ?? null,
+    workspaceId: (row?.["workspace_id"] as string | null | undefined) ?? null,
+  };
+  const role = (row?.["actor_role"] as string | null | undefined) ?? null;
+  if (!row || !canManageClient(ownership, actor, role, roles)) {
+    throw new OAuthError("not_found", "Deze app bestaat niet (meer).");
+  }
+  delete row["actor_role"];
+  return row;
 }
+
+/** client_id of an app the actor may manage. */
+export async function manageableClientId(actor: ClientActor, id: string): Promise<string> {
+  return String((await manageableClientRow(actor, id))["client_id"]);
+}
+const ownedClientId = manageableClientId;
 
 /* ------------------------------------------------------- test users ----- */
 
-export async function listTestUsers(ownerUserId: string, id: string): Promise<string[]> {
-  const clientId = await ownedClientId(ownerUserId, id);
+export async function listTestUsers(actor: ClientActor, id: string): Promise<string[]> {
+  const clientId = await ownedClientId(actor, id);
   const rows = (await sql`select identifier from public.oauth_client_test_users
     where client_id = ${clientId} order by created_at`) as Row[];
   return rows.map((r) => String(r["identifier"]));
 }
 
-export async function addTestUser(ownerUserId: string, id: string, identifier: string) {
-  const clientId = await ownedClientId(ownerUserId, id);
+export async function addTestUser(actor: ClientActor, id: string, identifier: string) {
+  const clientId = await ownedClientId(actor, id);
   const count = (await sql`select count(*)::int as n from public.oauth_client_test_users
     where client_id = ${clientId}`) as Row[];
   if (Number(count[0]?.["n"] ?? 0) >= MAX_TEST_USERS) {
@@ -377,8 +400,8 @@ export async function addTestUser(ownerUserId: string, id: string, identifier: s
     values (${clientId}, ${identifier.toLowerCase()}) on conflict do nothing`;
 }
 
-export async function removeTestUser(ownerUserId: string, id: string, identifier: string) {
-  const clientId = await ownedClientId(ownerUserId, id);
+export async function removeTestUser(actor: ClientActor, id: string, identifier: string) {
+  const clientId = await ownedClientId(actor, id);
   await sql`delete from public.oauth_client_test_users
     where client_id = ${clientId} and identifier = ${identifier.toLowerCase()}`;
 }
@@ -393,11 +416,17 @@ export async function userMayUseClient(
 ): Promise<boolean> {
   if (client.publishingStatus === "production") return true;
   if (SYSTEM_CLIENT_IDS.has(client.clientId)) return true;
-  const owner = (await sql`select owner_user_id from public.oauth_clients
-    where client_id = ${client.clientId} limit 1`) as Row[];
+  const owner = (await sql`select c.owner_user_id, c.workspace_id,
+      exists (select 1 from public.workspace_members m
+        where m.workspace_id = c.workspace_id and m.user_id = ${user.id}
+          and m.role::text = any(${[...APP_EDITOR_ROLES]})) as team_developer
+    from public.oauth_clients c
+    where c.client_id = ${client.clientId} limit 1`) as Row[];
   // Platform login (owner null) is ROUT's own sign-in, not a developer app.
-  if (owner[0] && owner[0]["owner_user_id"] == null) return true;
+  if (owner[0] && owner[0]["owner_user_id"] == null && owner[0]["workspace_id"] == null) return true;
   if (String(owner[0]?.["owner_user_id"]) === user.id) return true;
+  // Teammates with developer rights may test a workspace app before it goes live.
+  if (owner[0]?.["team_developer"] === true) return true;
   let handles: Row[] = [];
   try {
     handles = (await sql`select lower(username) as h from public.profiles
@@ -415,8 +444,8 @@ export async function userMayUseClient(
 
 export type VerificationStatus = "none" | "pending" | "verified" | "rejected";
 
-export async function latestVerification(ownerUserId: string, id: string) {
-  const clientId = await ownedClientId(ownerUserId, id);
+export async function latestVerification(actor: ClientActor, id: string) {
+  const clientId = await ownedClientId(actor, id);
   const rows = (await sql`select status, created_at, reviewed_at
     from public.oauth_client_verification_requests
     where client_id = ${clientId} order by created_at desc limit 1`) as Row[];
@@ -428,8 +457,8 @@ export async function latestVerification(ownerUserId: string, id: string) {
   };
 }
 
-export async function requestVerification(ownerUserId: string, id: string, note: string) {
-  const clientId = await ownedClientId(ownerUserId, id);
+export async function requestVerification(actor: ClientActor, id: string, note: string) {
+  const clientId = await ownedClientId(actor, id);
   const client = await getClientByClientId(clientId);
   if (!client?.supportEmail || !client.legalOwner || !client.privacyUrl) {
     throw new OAuthError("incomplete", "Vul eerst support-e-mail, juridische eigenaar en privacybeleid in.");
@@ -438,7 +467,7 @@ export async function requestVerification(ownerUserId: string, id: string, note:
     where client_id = ${clientId} and status in ('pending','verified') limit 1`) as Row[];
   if (open.length) throw new OAuthError("exists", "Er loopt al een aanvraag of de app is al geverifieerd.");
   await sql`insert into public.oauth_client_verification_requests (client_id, requested_by, note)
-    values (${clientId}, ${ownerUserId}, ${note || null})`;
+    values (${clientId}, ${actor.userId}, ${note || null})`;
 }
 
 /** Enkel aanroepen nadat de beheerdersrol server-side is gecontroleerd. */
@@ -479,8 +508,8 @@ export async function isVerifiedApp(clientId: string): Promise<boolean> {
 
 /* ---------------------------------------------------------- insights ---- */
 
-export async function clientInsights(ownerUserId: string, id: string) {
-  const clientId = await ownedClientId(ownerUserId, id);
+export async function clientInsights(actor: ClientActor, id: string) {
+  const clientId = await ownedClientId(actor, id);
   const users = (await sql`select count(*)::int as n from public.oauth_consents
     where client_id = ${clientId}`) as Row[];
   const codes = (await sql`select
@@ -503,16 +532,18 @@ export function ipAllowed(client: OAuthClient, ip: string | null): boolean {
   return Boolean(ip) && client.allowedIps.includes(ip!);
 }
 
-export async function deleteClient(ownerUserId: string, id: string): Promise<void> {
-  await sql`delete from public.oauth_clients where id = ${id} and owner_user_id = ${ownerUserId}`;
+export async function deleteClient(actor: ClientActor, id: string): Promise<void> {
+  await manageableClientRow(actor, id);
+  await sql`delete from public.oauth_clients where id = ${id}`;
 }
 
-export async function rotateClientSecret(ownerUserId: string, id: string): Promise<string> {
+export async function rotateClientSecret(actor: ClientActor, id: string): Promise<string> {
+  await manageableClientRow(actor, id);
   const clientSecret = generateClientSecret();
   const secretHash = await hashClientSecret(clientSecret, await secretPepper());
   const rows = (await sql`update public.oauth_clients
     set secret_hash = ${secretHash}, secret_rotated_at = now(), updated_at = now()
-    where id = ${id} and owner_user_id = ${ownerUserId} returning id`) as Row[];
+    where id = ${id} returning id`) as Row[];
   if (!rows[0]) throw new OAuthError("not_found", "Deze app bestaat niet (meer).");
   return clientSecret;
 }
@@ -670,6 +701,10 @@ export async function exchangeAuthorizationCode(input: {
   const now = Math.floor(Date.now() / 1000);
   const scoped = await subjectFor(client, userId, String(row["redirect_uri"]));
   const subject = scoped.sub;
+  if (scopes.includes(HANDLE_RESERVATION_SCOPE)) {
+    const { handleReservationClaim } = await import("./handle-reservation.server");
+    claims[HANDLE_RESERVATION_CLAIM] = await handleReservationClaim(userId, client.clientId, subject);
+  }
   const idToken = await signJwt({
     iss: issuer(),
     sub: subject,

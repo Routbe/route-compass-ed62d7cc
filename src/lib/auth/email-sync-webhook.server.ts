@@ -5,6 +5,7 @@
  */
 import { sql } from "@/lib/neon";
 import { emailUpdatedEvent, signWebhook, webhookUrlAllowed, type BulkChange } from "@/lib/oauth/backchannel";
+import type { WebhookDelivery } from "@/lib/oauth/email-push";
 import { assertPublicHost } from "@/lib/safe-fetch.server";
 
 const LABEL = "rout:backchannel-webhook:v1:";
@@ -54,7 +55,16 @@ export async function setBackchannelWebhook(clientId: string, url: string | null
 
 /** Sends one event per changed app. Never throws; failures are logged without URL or body. */
 export async function dispatchEmailUpdated(userId: string, changes: BulkChange[]): Promise<void> {
-  if (!changes.length) return;
+  await deliverEmailUpdated(userId, changes);
+}
+
+/**
+ * Same delivery, but reports per app: `ok` (2xx), `failed`, or `none` (no webhook
+ * registered or no email consent). Never throws.
+ */
+export async function deliverEmailUpdated(userId: string, changes: BulkChange[]): Promise<Map<string, WebhookDelivery>> {
+  const result = new Map<string, WebhookDelivery>(changes.map((c) => [c.clientId, "none"]));
+  if (!changes.length) return result;
   const ids = changes.map((c) => c.clientId);
   const rows = (await sql`select client_id, backchannel_webhook_url, backchannel_webhook_secret_sealed, backchannel_webhook_secret_iv
     from public.oauth_clients c where client_id = any(${ids}) and backchannel_webhook_url is not null
@@ -66,6 +76,7 @@ export async function dispatchEmailUpdated(userId: string, changes: BulkChange[]
     const change = changes.find((c) => c.clientId === clientId);
     const url = String(r["backchannel_webhook_url"]);
     if (!change || !webhookUrlAllowed(url)) return;
+    result.set(clientId, "failed");
     try {
       if (!(await assertPublicHost(new URL(url).hostname))) return;
       const secret = await openWebhookSecret(clientId, String(r["backchannel_webhook_secret_sealed"]), String(r["backchannel_webhook_secret_iv"]));
@@ -79,8 +90,10 @@ export async function dispatchEmailUpdated(userId: string, changes: BulkChange[]
         signal: AbortSignal.timeout(5000),
       });
       if (!res.ok) console.warn(`[backchannel] ${clientId} answered ${res.status}`);
+      else result.set(clientId, "ok");
     } catch (e) {
       console.warn(`[backchannel] ${clientId} failed`, e instanceof Error ? e.name : "error");
     }
   }));
+  return result;
 }

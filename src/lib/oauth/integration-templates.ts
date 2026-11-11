@@ -41,7 +41,7 @@ export type TemplateApp = {
   requirePkce: boolean;
   richIdentityEnabled: boolean;
   accountDiscoveryEnabled: boolean;
-  /** Universal Handle Sync: `rout_handle` claim + `user.handle.updated` webhook. */
+  /** Universal Handle Sync: `rout_handle` claim, refreshed on every login. */
   handleSyncEnabled?: boolean;
 };
 
@@ -68,13 +68,14 @@ export const SCOPE_CLAIMS: Record<string, string[]> = {
   "sybil:verify": ["is_unique_human", "app_sybil_nullifier"],
   "identity:legal_name": ["first_name", "last_name", "full_legal_name"],
   "accounts:merge": ["rout_matched_account"],
+  "identity:handle_reservation": ["rout_handle_reservation"],
 };
 
 /** Every claim ROUT can ever send (advertised as `claims_supported` in discovery). */
 export const CLAIMS_SUPPORTED = [
   "sub", "iss", "aud", "exp", "iat", "nonce", "acr",
   "preferred_username", "name", "picture", "email", "email_verified",
-  "rout_handle", "rout_public_activity", "rout_matched_account",
+  "rout_handle", "rout_handle_reservation", "rout_public_activity", "rout_matched_account",
   "is_unique_human", "app_sybil_nullifier", "first_name", "last_name", "full_legal_name",
 ] as const;
 
@@ -92,6 +93,13 @@ export function featureInstructions(app: TemplateApp): Record<string, string[]> 
     out["email"] = [
       "- `email` + `email_verified` come from the id_token/userinfo. The member may pick a private relay address for your app; treat it as a normal address and never ask for the 'real' one.",
       "- Email sync (optional): if a webhook URL is registered in the ROUT console (Credentials), ROUT POSTs JSON `{ event: \"https://schemas.rout.be/events/user-email-updated\", sub, previous_email, new_email, updated_at }` with headers `x-rout-event: user.email_updated` and `x-rout-signature: t=<unix>,v1=<hex>`; v1 = HMAC-SHA256(ROUT_WEBHOOK_SECRET, `${t}.${rawBody}`). Verify in constant time, reject if |now - t| > 300 s, then update the email of the user whose rout_id = sub. `sub` is your app-specific id; no other user id is ever sent.",
+    ];
+  }
+  if (app.scopes.includes("identity:handle_reservation")) {
+    out["identity:handle_reservation"] = [
+      "- Handle reservation (`identity:handle_reservation`): the id_token and userinfo contain `rout_handle_reservation` = { status, handle?, verified_human, issued_at, binding? }. Only when status is \"reserved\" may you set the user's UNIQUE `username` to `handle` (lower-case) without your own anti-bot or anti-squatting checks; ROUT vouches it is the member's own root handle on an active, e-mail-confirmed account.",
+      "- Status \"unavailable\" or \"rate_limited\": do not adopt a name; fall back to your normal username flow and try again at the next login. Never accept the handle from client input.",
+      "- Integrity: store `binding` next to the username. It equals base64url(SHA-256(`rout-hr-v1|" + app.clientId + "|${sub}|${handle}`)); recompute it when you load the record and treat a mismatch as tampered data. Always link users by `sub`, never by the handle.",
     ];
   }
   if (app.scopes.includes("accounts:merge")) {
@@ -121,7 +129,7 @@ export function featureInstructions(app: TemplateApp): Record<string, string[]> 
   if (app.handleSyncEnabled) {
     out["handle"] = [
       "- Universal Handle Sync is enabled: the `rout_handle` claim (requires the `profile` scope) is the user's username. Add a UNIQUE `username` column, set it from `rout_handle` on every login, and do NOT build a separate username picker or let users edit it.",
-      "- ROUT does not send handle-change webhooks yet: refresh `username` from `rout_handle` on every login. Do not build a handle webhook until ROUT announces it.",
+      "- Refresh `username` from `rout_handle` on every login and always look users up by `sub`, never by the handle.",
     ];
   }
   if (app.accountDiscoveryEnabled) {
@@ -253,7 +261,7 @@ export function buildHandleSyncPrompt(app: PromptApp, tool: AiTool = "generic", 
     `I am building an app ("${app.name}") and want to integrate 'Login with ROUT' as my authentication and identity provider.`,
     `Please build the standard OIDC OAuth2 flow using the discovery URL: \`${DISCOVERY_URL}\`.`,
     `My Client ID is: ${app.clientId}.`,
-    "CRITICAL REQUIREMENT: Do not build a custom username system. Instead, extract the `rout_handle` claim from ROUT's UserInfo endpoint and map it directly as the primary unique `username` field in our database. Refresh it from `rout_handle` on every login (ROUT does not send handle-change webhooks yet; do not build one).",
+    "CRITICAL REQUIREMENT: Do not build a custom username system. Instead, extract the `rout_handle` claim from ROUT's UserInfo endpoint and map it directly as the primary unique `username` field in our database. Refresh it from `rout_handle` on every login and always look users up by `sub`.",
     "",
     "## Configuration",
     "- Request the exact registered redirect URI before enabling the button. Confidential clients use ROUT_CLIENT_SECRET server-side; public clients use PKCE without a secret.",
@@ -321,14 +329,15 @@ export function verifyRoutSignature(rawBody: string, header: string, secret: str
   return got.length === 32 && timingSafeEqual(got, Buffer.from(expected, "hex"));
 }`;
 
-export function handleUpdatedSample(clientId: string): string {
+/** Body of the one webhook ROUT sends today (backchannel.ts `emailUpdatedEvent`). */
+export function emailUpdatedSample(): string {
   return JSON.stringify(
     {
-      id: "evt_01J9Z8K3QH4M2N",
-      type: "user.handle.updated",
-      created_at: "2026-10-10T10:40:00Z",
-      client_id: clientId,
-      data: { sub: "pw_3kq9…(app-specific)", previous_handle: "oldname", rout_handle: "newname" },
+      event: "https://schemas.rout.be/events/user-email-updated",
+      sub: "pw_3kq9…(app-specific)",
+      previous_email: "old@example.com",
+      new_email: "new@example.com",
+      updated_at: 1791628800,
     },
     null,
     2,

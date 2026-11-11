@@ -53,6 +53,7 @@ const SCOPES = [
   { id: "profile", label: "profile", text: "Naam, handle en avatar." },
   { id: "email", label: "email", text: "E-mailadres en of het geverifieerd is." },
   { id: "accounts:merge", label: "accounts:merge", text: "Bestaande accounts herkennen via blinde hashes; je krijgt alleen het account dat het lid bevestigt." },
+  { id: "identity:handle_reservation", label: "identity:handle_reservation", text: "De geverifieerde @handle van het lid overnemen als gebruikersnaam, zonder eigen anti-bot-systeem." },
 ];
 
 const STEPS = ["App-info", "Terug-adressen", "Sleutels", "Overzicht"];

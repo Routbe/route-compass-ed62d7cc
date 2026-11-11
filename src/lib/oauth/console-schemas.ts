@@ -43,7 +43,7 @@ export const redirectUriSchema = z
 export const MAX_REDIRECT_URIS = 10;
 
 /** Agent scopes are human-delegated and always ride on ≤1 h tokens (src/lib/agent/agent-scopes.ts). */
-export const scopeEnum = z.enum(["openid", "profile", "email", "linked_accounts", "accounts:merge", "assets:write", "profile:draft", "identity:read_public"]);
+export const scopeEnum = z.enum(["openid", "profile", "email", "linked_accounts", "accounts:merge", "identity:handle_reservation", "assets:write", "profile:draft", "identity:read_public"]);
 
 export const clientSchema = z
   .object({
