@@ -32,8 +32,8 @@ export const docs = localizedDocs.filter(doc => doc.locale === "nl");
 export function getDoc(path: string, locale: Locale = "nl") { return localizedDocs.find(d => d.path === path && d.locale === locale) ?? docs.find(d => d.path === path); }
 const articleOrder: Partial<Record<DocCategory, string[]>> = {
   about: ["index", "manifesto", "platform", "rout-card", "anonymous-questions", "responsible-ai", "ai-agents", "ecosystem", "sovereignty", "open-source", "brand"],
-  info: ["index", "sign-in-with-rout", "human-verification", "profiles", "payment-pages", "integrations", "links-and-analytics", "anonymous-questions", "answers-and-stories", "ghost-mode", "usernames", "badges", "custom-badges", "credentials", "qr-studio", "wallet", "tips", "guestbook", "bookings", "newsletter", "email-forwarding", "referrals", "account-security", "account-merge", "parental-consent"],
-  dev: ["index", "get-started", "identity-oidc", "identity", "credentials-api", "credentials", "webhooks", "ai-mcp", "design-system"],
+  info: ["index", "sign-in-with-rout", "connected-apps", "no-account-lists", "human-verification", "profiles", "payment-pages", "integrations", "links-and-analytics", "anonymous-questions", "answers-and-stories", "ghost-mode", "usernames", "badges", "custom-badges", "credentials", "qr-studio", "wallet", "tips", "guestbook", "bookings", "newsletter", "email-forwarding", "referrals", "account-security", "account-merge", "parental-consent"],
+  dev: ["index", "get-started", "identity-oidc", "identity", "graduated-consent", "blind-hash-matching", "email-sync-webhooks", "credentials-api", "credentials", "webhooks", "ai-mcp", "design-system"],
   safety: ["index", "anonymous-questions", "architecture", "cryptography", "zero-knowledge", "compliance", "transparency", "privacy", "terms", "data-deletion", "security-advisories"],
 };
 export function docsInCategory(category: DocCategory, locale: Locale = "nl") {
