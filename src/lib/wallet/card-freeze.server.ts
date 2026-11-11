@@ -27,10 +27,11 @@ export async function cardFrozen(serial: string): Promise<{ frozen: boolean; ava
 }
 
 /** Card frozen, or any physical key linked to it frozen/revoked. */
-export async function cardStatus(serial: string): Promise<"active" | "frozen" | "unavailable"> {
+export async function cardStatus(serial: string): Promise<"active" | "frozen" | "blocked" | "unavailable"> {
   try {
     const rows = await sql.query("select public.rout_card_status_by_serial($1) as s", [serial]);
-    return rows[0]?.s === "active" ? "active" : rows[0]?.s === "frozen" ? "frozen" : "unavailable";
+    const s = rows[0]?.s;
+    return s === "active" || s === "frozen" || s === "blocked" ? s : "unavailable";
   } catch (err) {
     return "unavailable";
   }
@@ -41,13 +42,20 @@ export async function validateCardActive(serial: string): Promise<boolean> {
   return (await cardStatus(serial)) === "active";
 }
 
-/** Runs inside requireAuth's DB context, so RLS pins user_id to the caller. */
-export async function setCardFrozen(serial: string, userId: string, frozen: boolean): Promise<void> {
+/**
+ * Freezes or thaws the card serial plus any extra serials (the wallet key).
+ * Ownership is checked in SQL as well as by RLS; a blocked serial never thaws.
+ */
+export async function setCardFrozen(serial: string, userId: string, frozen: boolean, extra: string[] = []): Promise<void> {
+  const serials = [serial, ...extra];
   try {
     if (frozen) {
-      await sql.query("insert into public.card_freezes (serial, user_id) values ($1, $2::uuid) on conflict (serial) do nothing", [serial, userId]);
+      await sql.query(
+        "insert into public.card_freezes (serial, user_id) select s, $2::uuid from unnest($1::text[]) as s on conflict (serial) do nothing",
+        [serials, userId],
+      );
     } else {
-      await sql.query("delete from public.card_freezes where serial = $1", [serial]);
+      await sql.query("delete from public.card_freezes where serial = any($1::text[]) and user_id = $2::uuid and not blocked", [serials, userId]);
     }
   } catch (err) {
     if (missingSchema(err)) throw notReady();
@@ -57,12 +65,55 @@ export async function setCardFrozen(serial: string, userId: string, frozen: bool
   try {
     await sql.query(
       frozen
-        ? "update public.physical_keys set status = 'frozen' where card_serial = $1 and status = 'active'"
-        : "update public.physical_keys set status = 'active' where card_serial = $1 and status = 'frozen' and public_key is not null",
-      [serial],
+        ? "update public.physical_keys set status = 'frozen' where card_serial = $1 and user_id = $2::uuid and status = 'active'"
+        : "update public.physical_keys set status = 'active' where card_serial = $1 and user_id = $2::uuid and status = 'frozen' and public_key is not null",
+      [serial, userId],
     );
   } catch (err) {
     if (!missingSchema(err)) throw err;
+  }
+}
+
+/** Permanent block: these serials never verify again. Linked physical keys are revoked. */
+export async function blockCard(serial: string, userId: string, reason: "lost" | "stolen" | "replaced" | "other", extra: string[] = []): Promise<void> {
+  const serials = [serial, ...extra];
+  try {
+    await sql.query(
+      `insert into public.card_freezes (serial, user_id, blocked, reason) select s, $2::uuid, true, $3 from unnest($1::text[]) as s
+       on conflict (serial) do update set blocked = true, reason = excluded.reason where card_freezes.user_id = excluded.user_id`,
+      [serials, userId, reason],
+    );
+    await sql.query("update public.physical_keys set status = 'revoked' where card_serial = $1 and user_id = $2::uuid and status <> 'revoked'", [serial, userId]);
+  } catch (err) {
+    if (missingSchema(err)) throw notReady();
+    throw err;
+  }
+}
+
+/** Current card generation (0 = original numbers); unknown storage counts as 0. */
+export async function cardGeneration(userId: string): Promise<number> {
+  try {
+    const rows = await sql.query("select public.rout_card_generation($1::uuid) as g", [userId]);
+    const g = Number(rows[0]?.g ?? 0);
+    return Number.isInteger(g) && g >= 0 ? g : 0;
+  } catch {
+    return 0;
+  }
+}
+
+/** Starts a new card generation for a replacement; returns the new generation. */
+export async function nextCardGeneration(userId: string): Promise<number> {
+  try {
+    const rows = await sql.query(
+      `insert into public.rout_card_generations (user_id, generation) values ($1::uuid, 1)
+       on conflict (user_id) do update set generation = rout_card_generations.generation + 1, replaced_at = now()
+       returning generation`,
+      [userId],
+    );
+    return Number(rows[0]?.generation);
+  } catch (err) {
+    if (missingSchema(err) || /rout_card_generations/.test(String((err as Error)?.message))) throw notReady();
+    throw err;
   }
 }
 

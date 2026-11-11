@@ -5,6 +5,7 @@
  * Without a strong secret there is no key pass at all (fails closed).
  */
 import { KEY_TOTP_DIGITS, KEY_TOTP_PERIOD_MS, type WalletKeyPayload } from "./wallet-key";
+import { generationLabel } from "./card-lifecycle";
 
 const enc = new TextEncoder();
 
@@ -22,9 +23,10 @@ async function mac(secret: string, label: string): Promise<Uint8Array> {
 const hex = (b: Uint8Array) => Array.from(b, (x) => x.toString(16).padStart(2, "0")).join("");
 
 /** Builds the key for one account; `now` makes every issue/sync carry a fresh token. */
-export async function walletKeyPayload(accountId: string, secret: string | undefined, now = Date.now()): Promise<WalletKeyPayload | null> {
+export async function walletKeyPayload(accountId: string, secret: string | undefined, now = Date.now(), generation = 0): Promise<WalletKeyPayload | null> {
   if (!secret || secret.length < 32 || !accountId) return null;
-  const id = hex(await mac(secret, `rout-key:v1:id:${accountId}`)).slice(0, 16);
+  // A replaced card gets a new key id; generation 0 keeps the original key.
+  const id = hex(await mac(secret, `rout-key:v1:id:${accountId}${generationLabel(generation)}`)).slice(0, 16);
   const issued = Math.floor(now / 1000).toString(36);
   const sig = b64url(await mac(secret, `rout-key:v1:tap:${id}:${issued}`)).slice(0, 27);
   const totp = { keyId: id, secretHex: await keyTotpSecret(id, secret) };

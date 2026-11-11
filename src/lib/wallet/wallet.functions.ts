@@ -52,13 +52,18 @@ export const getMyWalletVault = createServerFn({ method: "GET" })
     const secret = (env["WALLET_ID_SECRET"]?.length ?? 0) >= 32;
     // The root payload only resolves for a verified profile; without it no card is issued.
     const verified = root?.space === "root";
+    const { memberHasTwoFactor } = await import("./card-owner.server");
+    const twoFactor = await memberHasTwoFactor(context.userId);
     return {
       verified,
+      twoFactor,
       root: verified ? root.handle : null,
       alias: verified && alias?.space === "alias" ? alias.handle : null,
       google: status.google,
       apple: status.apple,
-      keyGoogle: verified && status.google && secret && !!smartTapConfig(env),
+      // Google: the rotating QR works without Smart Tap; NFC joins once Google approves it.
+      keyGoogle: verified && status.google && secret,
+      keyGoogleNfc: !!smartTapConfig(env),
       keyApple: verified && status.apple && secret && !!appleNfcConfig(env),
     };
   });
@@ -80,13 +85,20 @@ export const createVaultPass = createServerFn({ method: "POST" })
     if (!(await isVerifiedMember(context.userId))) return { ok: false as const, error: "not_verified" };
     try {
       if (data.passType === "SMART_TAP_KEY") {
+        // The private ROUT card: 2FA on, card active and unlocked by a fresh verification.
+        const { memberHasTwoFactor, myRootCard } = await import("./card-owner.server");
+        if (!(await memberHasTwoFactor(context.userId))) return { ok: false as const, error: "two_factor_required" };
+        const mine = await myRootCard(context.userId);
+        if (!mine) return { ok: false as const, error: "no_profile" };
+        if (mine.state !== "active") return { ok: false as const, error: "card_inactive" };
+        const { cardUnlockedUntil } = await import("./card-unlock.server");
+        if (!(await cardUnlockedUntil(context.userId))) return { ok: false as const, error: "locked" };
         const { smartTapConfig, googleKeySaveClaims } = await import("./wallet-key");
-        const smartTap = smartTapConfig(env);
-        if (!smartTap) return { ok: false as const, error: "smart_tap_not_configured" };
         const { walletKeyPayload } = await import("./wallet-key.server");
-        const key = await walletKeyPayload(context.userId, env["WALLET_ID_SECRET"]);
+        const key = await walletKeyPayload(context.userId, env["WALLET_ID_SECRET"], Date.now(), mine.generation);
         if (!key) return { ok: false as const, error: "key_not_configured" };
-        const claims = googleKeySaveClaims(key, { issuerId: cfg.issuerId, serviceAccountEmail: cfg.serviceAccountEmail, origins: [walletOrigin()], logoUrl: googleLogoUrl({ url: walletOrigin() }), smartTap });
+        const origin = walletOrigin();
+        const claims = googleKeySaveClaims(key, { issuerId: cfg.issuerId, serviceAccountEmail: cfg.serviceAccountEmail, origins: [origin], logoUrl: googleLogoUrl({ url: origin }), smartTap: smartTapConfig(env), manageUrl: `${origin}/wallet` });
         return { ok: true as const, saveUrl: googleSaveLink(await signGoogleSaveJwt(claims, cfg)) };
       }
       const space = data.passType === "STEALTH" ? "alias" : "root";
@@ -182,6 +194,11 @@ export const getCardLiveness = createServerFn({ method: "POST" })
     const { cardStatus } = await import("./card-freeze.server");
     const status = await cardStatus(card.serial);
     const live = owner && status === "active";
+    let unlocked = false;
+    if (live && context.userId) {
+      const { cardUnlockedUntil } = await import("./card-unlock.server");
+      unlocked = !!(await cardUnlockedUntil(context.userId));
+    }
     // Age tier is told to the owner only; visitors never learn a member is a minor.
     const { isMinorUser } = await import("@/lib/minor-safety.server");
     const minor = owner && context.userId ? await isMinorUser(context.userId).catch(() => true) : false;
@@ -195,12 +212,14 @@ export const getCardLiveness = createServerFn({ method: "POST" })
       owner,
       tier: (minor ? "minor" : "sovereign") as "minor" | "sovereign",
       frozen: status !== "active",
+      blocked: status === "blocked",
+      locked: owner && !unlocked,
       freezeAvailable: status !== "unavailable",
       window: w,
       expiresAt: (w + 1) * LIVE_WINDOW_S * 1000,
       serverNow: now,
       seed: await liveSeed(key, card.serial, w),
-      code: live ? await liveCode(key, card.serial, w) : null,
+      code: live && unlocked ? await liveCode(key, card.serial, w) : null,
     };
   });
 
@@ -217,11 +236,14 @@ export const getSecureCardToken = createServerFn({ method: "POST" })
     if (!own) return null;
     const { validateCardActive } = await import("./card-freeze.server");
     if (!(await validateCardActive(own.serial))) return { frozen: true as const };
+    // Private side: only inside the short window opened by a fresh verification.
+    const { cardUnlockedUntil } = await import("./card-unlock.server");
+    if (!(await cardUnlockedUntil(context.userId))) return { frozen: false as const, locked: true as const };
     const { livenessKey } = await import("./card-liveness.server");
     const { signSecureToken, accessPayload } = await import("./card-token");
     const now = Date.now();
     const { token, payload } = await signSecureToken(await livenessKey(), { handle: own.handle, space: own.space, now });
-    return { frozen: false as const, url: accessPayload(token), iat: payload.iat, exp: payload.exp, serverNow: now };
+    return { frozen: false as const, locked: false as const, url: accessPayload(token), iat: payload.iat, exp: payload.exp, serverNow: now };
   });
 
 /** Public: check a secure QR from the back of a card. Rate limited. */
@@ -254,7 +276,10 @@ export const verifyCardLiveCode = createServerFn({ method: "POST" })
     return { valid: await verifyLiveCode(await livenessKey(), card.serial, data.code, Date.now()), limited: false };
   });
 
-/** Owner only: freeze or unfreeze their own card (lost or stolen). */
+/**
+ * Owner only: freeze (instant, one tap) or unfreeze (fresh verification + 2FA).
+ * The root card and its wallet key freeze together; a blocked card never thaws.
+ */
 export const setMyCardFrozen = createServerFn({ method: "POST" })
   .middleware([requireAuth])
   .inputValidator((d: unknown) => z.object({ frozen: z.boolean(), space: z.enum(["root", "alias"]).optional() }).parse(d))
@@ -262,9 +287,133 @@ export const setMyCardFrozen = createServerFn({ method: "POST" })
     const { generateWalletPayload } = await import("./wallet-payload.server");
     const own = await generateWalletPayload(context.userId, { space: data.space, allowAccountId: true });
     if (!own) throw Object.assign(new Error("No card"), { statusCode: 404 });
+    const { myRootCard, memberHasTwoFactor } = await import("./card-owner.server");
+    const mine = own.space === "root" ? await myRootCard(context.userId) : null;
+    if (mine?.state === "blocked") return { frozen: true, blocked: true };
+    if (!data.frozen) {
+      if (!(await memberHasTwoFactor(context.userId))) throw new Error("two_factor_required");
+      const { ensureStepUpSession, consumeStepUp } = await import("@/lib/auth/step-up.server");
+      await ensureStepUpSession(context.userId, "card_lifecycle");
+      await consumeStepUp();
+    }
     const { setCardFrozen } = await import("./card-freeze.server");
-    await setCardFrozen(own.serial, context.userId, data.frozen);
-    return { frozen: data.frozen };
+    await setCardFrozen(own.serial, context.userId, data.frozen, mine?.keySerial ? [mine.keySerial] : []);
+    if (data.frozen) {
+      const { closeCardUnlock } = await import("./card-unlock.server");
+      await closeCardUnlock();
+    }
+    const { recordSecurityEvent } = await import("@/lib/audit-log.server");
+    void recordSecurityEvent({ eventType: data.frozen ? "card.frozen" : "card.unfrozen", userId: context.userId, payload: { space: own.space } });
+    return { frozen: data.frozen, blocked: false };
+  });
+
+/** Owner only: the private ROUT card's security facts (never codes or key material). */
+export const getMyCardSecurity = createServerFn({ method: "GET" })
+  .middleware([requireAuth])
+  .handler(async ({ context }) => {
+    const { myRootCard, memberHasTwoFactor } = await import("./card-owner.server");
+    const { cardUnlockedUntil } = await import("./card-unlock.server");
+    const [mine, twoFactor, unlockedUntil] = await Promise.all([myRootCard(context.userId), memberHasTwoFactor(context.userId), cardUnlockedUntil(context.userId)]);
+    const { walletStatus } = await import("./wallet-pass");
+    const { isPlatformFeatureEnabled } = await import("@/lib/platform-features.server");
+    const wallet = (await isPlatformFeatureEnabled("wallet")) ? walletStatus(process.env as Record<string, string | undefined>) : { apple: false, google: false };
+    return {
+      hasCard: !!mine,
+      handle: mine?.card.handle ?? null,
+      cardNumber: mine?.card.sovereignId ?? null,
+      state: mine?.state ?? ("unavailable" as const),
+      replaced: (mine?.generation ?? 0) > 0,
+      twoFactor,
+      unlockedUntil: mine?.state === "active" && twoFactor ? unlockedUntil : null,
+      serverNow: Date.now(),
+      wallet,
+    };
+  });
+
+/** Owner only: opens the 5-minute window for the private side after a fresh verification. */
+export const unlockMyCard = createServerFn({ method: "POST" })
+  .middleware([requireAuth])
+  .handler(async ({ context }) => {
+    const { myRootCard, memberHasTwoFactor } = await import("./card-owner.server");
+    if (!(await memberHasTwoFactor(context.userId))) return { ok: false as const, error: "two_factor_required" as const };
+    const mine = await myRootCard(context.userId);
+    if (!mine) return { ok: false as const, error: "no_card" as const };
+    if (mine.state !== "active") return { ok: false as const, error: "card_inactive" as const };
+    const { ensureStepUpSession, consumeStepUp } = await import("@/lib/auth/step-up.server");
+    await ensureStepUpSession(context.userId, "card_reveal");
+    // One verification, one viewing: the proof is spent so the next viewing asks again.
+    await consumeStepUp();
+    const { openCardUnlock } = await import("./card-unlock.server");
+    return { ok: true as const, unlockedUntil: await openCardUnlock(context.userId), serverNow: Date.now() };
+  });
+
+/** Owner only: hides the private side again (on leave, tab switch or button). */
+export const lockMyCard = createServerFn({ method: "POST" })
+  .middleware([requireAuth])
+  .handler(async () => {
+    const { closeCardUnlock } = await import("./card-unlock.server");
+    await closeCardUnlock();
+    return { ok: true as const };
+  });
+
+/** Owner only: permanently block the private ROUT card (lost or stolen). Irreversible. */
+export const blockMyCard = createServerFn({ method: "POST" })
+  .middleware([requireAuth])
+  .inputValidator((d: unknown) => z.object({ reason: z.enum(["lost", "stolen", "other"]) }).strict().parse(d))
+  .handler(async ({ data, context }) => {
+    const { myRootCard, memberHasTwoFactor } = await import("./card-owner.server");
+    if (!(await memberHasTwoFactor(context.userId))) return { ok: false as const, error: "two_factor_required" as const };
+    const mine = await myRootCard(context.userId);
+    if (!mine) return { ok: false as const, error: "no_card" as const };
+    if (mine.state === "blocked") return { ok: true as const };
+    const { ensureStepUpSession, consumeStepUp } = await import("@/lib/auth/step-up.server");
+    await ensureStepUpSession(context.userId, "card_lifecycle");
+    await consumeStepUp();
+    const { blockCard } = await import("./card-freeze.server");
+    try {
+      await blockCard(mine.card.serial, context.userId, data.reason, mine.keySerial ? [mine.keySerial] : []);
+    } catch (err) {
+      if ((err as { statusCode?: number }).statusCode === 503) return { ok: false as const, error: "unavailable" as const };
+      throw err;
+    }
+    const { closeCardUnlock } = await import("./card-unlock.server");
+    await closeCardUnlock();
+    const { recordSecurityEvent } = await import("@/lib/audit-log.server");
+    void recordSecurityEvent({ eventType: "card.blocked", userId: context.userId, payload: { reason: data.reason } });
+    return { ok: true as const };
+  });
+
+/**
+ * Owner only: replace the private ROUT card. The current number, wallet key and
+ * linked physical keys are blocked for good; a new number and key are issued.
+ */
+export const replaceMyCard = createServerFn({ method: "POST" })
+  .middleware([requireAuth])
+  .handler(async ({ context }) => {
+    const { myRootCard, memberHasTwoFactor } = await import("./card-owner.server");
+    if (!(await memberHasTwoFactor(context.userId))) return { ok: false as const, error: "two_factor_required" as const };
+    const mine = await myRootCard(context.userId);
+    if (!mine) return { ok: false as const, error: "no_card" as const };
+    const { ensureStepUpSession, consumeStepUp } = await import("@/lib/auth/step-up.server");
+    await ensureStepUpSession(context.userId, "card_lifecycle");
+    await consumeStepUp();
+    const { blockCard, nextCardGeneration } = await import("./card-freeze.server");
+    const { hitRateLimit } = await import("@/lib/rate-limit-db.server");
+    const limit = await hitRateLimit("card-replace", context.userId, { limit: 3, windowSec: 24 * 3600 }, { failClosed: true });
+    if (!limit.ok) return { ok: false as const, error: "rate_limited" as const };
+    try {
+      await blockCard(mine.card.serial, context.userId, "replaced", mine.keySerial ? [mine.keySerial] : []);
+      await nextCardGeneration(context.userId);
+    } catch (err) {
+      if ((err as { statusCode?: number }).statusCode === 503) return { ok: false as const, error: "unavailable" as const };
+      throw err;
+    }
+    const { closeCardUnlock } = await import("./card-unlock.server");
+    await closeCardUnlock();
+    const fresh = await myRootCard(context.userId);
+    const { recordSecurityEvent } = await import("@/lib/audit-log.server");
+    void recordSecurityEvent({ eventType: "card.replaced", userId: context.userId, payload: {} });
+    return { ok: true as const, cardNumber: fresh?.card.sovereignId ?? null };
   });
 
 const cmfInput = z.object({
@@ -332,9 +481,15 @@ export const pairMyPhysicalKey = createServerFn({ method: "POST" })
     space: z.enum(["root", "alias"]).optional(),
   }).parse(d))
   .handler(async ({ data, context }) => {
+    const { memberHasTwoFactor } = await import("./card-owner.server");
+    if (!(await memberHasTwoFactor(context.userId))) return { ok: false as const, error: "two_factor_required" as const };
+    const { cardUnlockedUntil } = await import("./card-unlock.server");
+    if (!(await cardUnlockedUntil(context.userId))) return { ok: false as const, error: "locked" as const };
     const { generateWalletPayload } = await import("./wallet-payload.server");
     const own = await generateWalletPayload(context.userId, { space: data.space, allowAccountId: true });
     if (!own) return { ok: false as const, error: "card" as const };
+    const { validateCardActive } = await import("./card-freeze.server");
+    if (!(await validateCardActive(own.serial))) return { ok: false as const, error: "card" as const };
     const { pairFactoryKey } = await import("./card-freeze.server");
     const { sha256Hex } = await import("./hardware-crypto");
     try {
@@ -350,7 +505,13 @@ export const pairMyPhysicalKey = createServerFn({ method: "POST" })
 export const setMyPhysicalKeyStatus = createServerFn({ method: "POST" })
   .middleware([requireAuth])
   .inputValidator((d: unknown) => z.object({ hardwareId: z.string().uuid(), status: z.enum(["active", "frozen", "revoked"]) }).parse(d))
-  .handler(async ({ data }) => {
+  .handler(async ({ data, context }) => {
+    // Freezing/revoking a key is always instant; switching one back on needs the unlocked card.
+    if (data.status === "active") {
+      const { memberHasTwoFactor } = await import("./card-owner.server");
+      const { cardUnlockedUntil } = await import("./card-unlock.server");
+      if (!(await memberHasTwoFactor(context.userId)) || !(await cardUnlockedUntil(context.userId))) return { ok: false };
+    }
     const { setMyKeyStatus } = await import("./card-freeze.server");
     return { ok: await setMyKeyStatus(data.hardwareId, data.status) };
   });
