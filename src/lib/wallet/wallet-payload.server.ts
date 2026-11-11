@@ -21,15 +21,18 @@ export function walletOrigin(): string {
  * card number can neither be computed from a leaked account id nor link a
  * member's root and alias cards. Without the key it hashes only public data.
  */
-async function cardDigest(space: "root" | "alias", accountId: string, handle: string): Promise<string> {
+async function cardDigest(space: "root" | "alias", accountId: string, handle: string, generation = 0): Promise<string> {
   const enc = new TextEncoder();
+  // A replaced card (generation > 0) gets a new number; generation 0 keeps the original.
+  const { generationLabel } = await import("./card-lifecycle");
+  const gen = space === "root" ? generationLabel(generation) : "";
   const secret = process.env["WALLET_ID_SECRET"];
   let bytes: ArrayBuffer;
   if (secret && secret.length >= 32) {
     const key = await crypto.subtle.importKey("raw", enc.encode(secret), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
-    bytes = await crypto.subtle.sign("HMAC", key, enc.encode(`rout-card:v2:${space}:${accountId}`));
+    bytes = await crypto.subtle.sign("HMAC", key, enc.encode(`rout-card:v2:${space}:${accountId}${gen}`));
   } else {
-    bytes = await crypto.subtle.digest("SHA-256", enc.encode(`rout-card:public:${space}:${handle.toLowerCase()}`));
+    bytes = await crypto.subtle.digest("SHA-256", enc.encode(`rout-card:public:${space}:${handle.toLowerCase()}${gen}`));
   }
   return [...new Uint8Array(bytes)].map((b) => b.toString(16).padStart(2, "0")).join("");
 }
@@ -89,7 +92,10 @@ export async function generateWalletPayload(
       },
       base,
       ...(await (async () => {
-        const digest = await cardDigest(space, String(p["id"] ?? ""), String(p["username"] ?? handle));
+        const accountId = String(p["id"] ?? "");
+        const { cardGeneration } = await import("./card-freeze.server");
+        const generation = space === "root" && UUID.test(accountId) ? await cardGeneration(accountId) : 0;
+        const digest = await cardDigest(space, accountId, String(p["username"] ?? handle), generation);
         return [sovereignIdFromDigest(digest), await serialSeed(digest)] as const;
       })()),
     );
