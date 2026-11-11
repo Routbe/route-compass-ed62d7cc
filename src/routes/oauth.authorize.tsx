@@ -7,7 +7,7 @@ import { useServerFn } from "@tanstack/react-start";
 import { useAuth } from "@/hooks/useAuth";
 import { Button } from "@/components/ui/button";
 import { RoutLogo } from "@/components/RoutLogo";
-import { BadgeCheck, Bot, Check, Eye, Fingerprint, IdCard, KeyRound, Loader2, Lock, Mail, PenLine, QrCode, ShieldCheck, User } from "lucide-react";
+import { AtSign, BadgeCheck, Bot, Check, Eye, Fingerprint, IdCard, KeyRound, Loader2, Lock, Mail, PenLine, QrCode, ShieldCheck, User } from "lucide-react";
 import { OPTIONAL_SCOPES, consentDelta } from "@/lib/oauth/scope-rules";
 import { BHM_PARAM, BHM_SCOPE, parseBlindHashes, type BhmIdentity } from "@/lib/oauth/blind-hash";
 import { Input } from "@/components/ui/input";
